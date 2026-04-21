@@ -30,6 +30,8 @@ For phone camera testing on the local network, use the HTTPS Vite URL, such as [
 
 The GreenCredit prototype uses existing static assets from `examples/public/assets/` for the Jasmine character and CSS-drawn foliage/camera scenes for the mocked plant views. The live camera mode imports the existing AlvaAR browser modules, and the video demo and AR view import ThreeJS modules from `threejsfundamentals.org`, so keep an internet connection available for those checks.
 
+The Jasmine chat microphone streams browser audio to the Railway ASR WebSocket at `wss://web-ar-alavar-poc-fastapi-production.up.railway.app/ws/asr`, requests `qwen3-asr-flash-realtime-2026-02-10`, and renders partial ASR text as live captions in the listening panel. The current Railway deployment requires an API auth token, so set `VITE_ASR_CLIENT_TOKEN` before running Vite; if a future backend disables auth, the browser omits `client_token` when that variable is empty. To point the frontend at another backend, set `VITE_ASR_WS_URL`.
+
 ### Run with http server
 To run the React examples on your local machine, start the Vite dev server in the examples folder:
 
@@ -98,6 +100,8 @@ Don’t do this unless the site is one you trust or develop.
 2026-04-21: Added HTTPS LAN guidance and a clearer camera API error when the page is opened from an insecure origin. Configuration impact: local Vite automatically switches to HTTPS when `examples/ssl/key.pem` and `examples/ssl/cert.pem` exist; no checked-in certificate files are required. Verification: run `cd ./examples && npm run start:http`, open `https://192.168.1.199:5174/` on a phone, accept the local certificate warning, tap Start, and confirm the browser asks for camera permission instead of showing `navigator.mediaDevices.getUserMedia` as undefined.
 
 2026-04-21: Added a clickable GreenCredit/Jasmine React prototype as the default app screen while preserving the live AR camera behind `?mode=ar`. Configuration impact: no backend changes; the root Vite URL now opens mocked prototype screens using existing static assets, and camera permission is only requested from `/?mode=ar`. Verification: run `cd ./examples && npm run build`, then open the printed Vite URL to navigate Home, Discover, AR capture, chat, Store, About, and Makers, and open the same origin with `?mode=ar` to confirm the original camera Start screen still appears.
+
+2026-04-22: Connected the Jasmine chat microphone to the Railway ASR WebSocket for realtime captioning. Configuration impact: no backend changes; the frontend defaults to `wss://web-ar-alavar-poc-fastapi-production.up.railway.app/ws/asr`, reads `VITE_ASR_CLIENT_TOKEN` for the current token-protected deployment, and can be redirected with `VITE_ASR_WS_URL`. Verification: run `curl https://web-ar-alavar-poc-fastapi-production.up.railway.app/health`, run `cd ./examples && npm run build`, open the HTTPS Vite URL, enter Jasmine chat, tap the microphone, speak, and confirm partial ASR text appears in the listening panel.
 
 
 ## Usage

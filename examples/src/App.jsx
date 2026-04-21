@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createRealtimeAsrSession } from './asr/realtimeAsr.js';
 import { useMicrophone } from './microphone/index.js';
 
 function ScreenTransition({ direction, screenKey, suppressAnimation, children }) {
@@ -358,35 +359,86 @@ function ChatIntro({ onTalk }) {
 }
 
 function ChatTranscript() {
-    const lines = [
+    const [lines, setLines] = useState([]);
+    const [liveCaption, setLiveCaption] = useState('');
+    const [asrStatus, setAsrStatus] = useState('idle');
+    const [asrError, setAsrError] = useState('');
+    const asrSessionRef = useRef(null);
 
-    ];
+    const stopAsrSession = useCallback(() => {
+        asrSessionRef.current?.stop();
+        asrSessionRef.current = null;
+        setAsrStatus('idle');
+    }, []);
 
     const handleStream = useCallback((stream) => {
-        // TODO: connect speech recognition service with the stream
-    }, []);
+        stopAsrSession();
+        setLiveCaption('');
+        setAsrError('');
+
+        const session = createRealtimeAsrSession({
+            stream,
+            onStatus: setAsrStatus,
+            onPartial: (caption) => {
+                setLiveCaption(caption);
+            },
+            onCompleted: (transcript) => {
+                setLiveCaption(transcript);
+                setLines(previousLines => [...previousLines, transcript].slice(-8));
+            },
+            onError: (message) => {
+                setAsrError(message);
+                setAsrStatus('error');
+            }
+        });
+
+        asrSessionRef.current = session;
+        session.start().catch((error) => {
+            const message = error instanceof Error ? error.message : 'Could not start ASR.';
+            setAsrError(message);
+            setAsrStatus('error');
+        });
+    }, [stopAsrSession]);
 
     const { isListening, startListening, stopListening } = useMicrophone({ onStream: handleStream });
 
-    const handleMicClick = () => {
+    useEffect(() => () => stopAsrSession(), [stopAsrSession]);
+
+    const handleMicClick = async () => {
         if (isListening) {
+            stopAsrSession();
             stopListening();
         } else {
-            startListening();
+            setAsrError('');
+            setLiveCaption('');
+            try {
+                await startListening();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Microphone permission failed.';
+                setAsrError(message);
+                setAsrStatus('error');
+            }
         }
     };
 
+    const overlayText = asrError || liveCaption || (asrStatus === 'connecting' ? 'Connecting ASR...' : 'Listening...');
+    const hasLiveCaption = Boolean(liveCaption && !asrError);
+
     return (
-        <div className={`chat-transcript${isListening ? ' is-listening' : ''}`}>
+        <div className={`chat-transcript${isListening ? ' is-listening' : ''}${asrError ? ' has-error' : ''}`}>
             <div className="chat-transcript-lines" tabIndex={0} aria-label="Conversation transcript">
                 {lines.map((line, index) => (
                     <p key={`${line}-${index}`} className={index % 2 === 1 ? 'faded' : ''}>{line}</p>
                 ))}
+                {asrError && !isListening && (
+                    <p className="chat-transcript-error">{asrError}</p>
+                )}
             </div>
             <div className="chat-transcript-listening-overlay" aria-live="polite" aria-hidden={!isListening}>
-                Listening...
+                {hasLiveCaption && <span className="asr-status-label">Listening...</span>}
+                <strong className={hasLiveCaption ? 'asr-caption' : ''}>{overlayText}</strong>
             </div>
-            <MicButton listening={isListening} onClick={handleMicClick} />
+            <MicButton warning={Boolean(asrError)} listening={isListening} onClick={handleMicClick} />
         </div>
     );
 }
