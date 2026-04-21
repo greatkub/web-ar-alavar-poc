@@ -22,15 +22,15 @@ class ARCamView
         this.spriteTexture = null;
         this.sprite = {
             columns: 4,
-            rows: 5,
-            frameCount: 17,
+            rows: 3,
+            frameCount: 12,
             fps: 7,
             currentFrame: -1,
             crop: {
-                x: 0.30,
-                y: 0.14,
-                width: 0.42,
-                height: 0.72
+                x: 0.18,
+                y: 0.02,
+                width: 0.70,
+                height: 0.90
             }
         };
         this.interaction = {

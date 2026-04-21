@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRealtimeAsrSession } from './asr/realtimeAsr.js';
 import { useMicrophone } from './microphone/index.js';
 import { createRealtimeTtsSession, prepareTtsAudio } from './tts/realtimeTts.js';
-import { supabase } from './supabase.js';
+import { isSupabaseConfigured, supabase } from './supabase.js';
 import { SignInScreen } from './SignInScreen.jsx';
+import { analyzeTreePhoto } from './treeAnalysis.js';
 
 function ScreenTransition({ direction, screenKey, suppressAnimation, children }) {
     const suppress = suppressAnimation ? ' screen-transition--suppress' : '';
@@ -57,11 +58,21 @@ const PLANTS = [
 ];
 
 const CREDITS = '1,240';
+const LOCAL_DEMO_SESSION = {
+    user: {
+        email: 'Local demo'
+    }
+};
 
 function useAuth() {
     const [session, setSession] = useState(undefined);
 
     useEffect(() => {
+        if (!isSupabaseConfigured) {
+            setSession(LOCAL_DEMO_SESSION);
+            return undefined;
+        }
+
         supabase.auth.getSession().then(({ data }) => {
             setSession(data.session ?? null);
         });
@@ -133,6 +144,10 @@ function LiveCameraDemo() {
 
 function GreenCreditPrototype({ session }) {
     const handleSignOut = useCallback(async () => {
+        if (!isSupabaseConfigured) {
+            return;
+        }
+
         await supabase.auth.signOut();
     }, []);
     const [activeScreen, setActiveScreen] = useState('home');
@@ -188,6 +203,8 @@ function GreenCreditPrototype({ session }) {
         );
     } else if (activeScreen === 'store') {
         body = <StoreScreen onBack={() => navigate('home', 'back')} />;
+    } else if (activeScreen === 'treeAnalysis') {
+        body = <TreeAnalysisScreen onBack={() => navigate('home', 'back')} />;
     } else if (activeScreen === 'about' || activeScreen === 'makers') {
         body = <InfoScreen type={activeScreen} onBack={() => navigate('home', 'back')} />;
     } else {
@@ -196,12 +213,14 @@ function GreenCreditPrototype({ session }) {
                 onOpenDetail={() => navigate('detail', 'forward')}
                 onOpenStore={() => navigate('store', 'forward')}
                 onOpenInfo={(screen) => navigate(screen, 'forward')}
+                onOpenTreeAnalysis={() => navigate('treeAnalysis', 'forward')}
                 onOpenCapture={() => {
                     setCaptureReturnScreen('home');
                     navigate('capture', 'forward');
                 }}
                 userEmail={session?.user?.email}
                 onSignOut={handleSignOut}
+                canSignOut={isSupabaseConfigured}
             />
         );
     }
@@ -217,7 +236,7 @@ function GreenCreditPrototype({ session }) {
     );
 }
 
-function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenCapture, userEmail, onSignOut }) {
+function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenCapture, userEmail, onSignOut, canSignOut }) {
     return (
         <main className="prototype-shell home-screen">
             <section className="home-content">
@@ -228,6 +247,7 @@ function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenCapture, user
                     <MenuCard title="Store" caption="Earn credits and shop sustainably" onClick={onOpenStore} />
                 </div>
                 <nav className="home-links" aria-label="More information">
+                    <button type="button" onClick={onOpenTreeAnalysis}>Tree image analysis</button>
                     <button type="button" onClick={() => onOpenInfo('about')}>About the app</button>
                     <button type="button" onClick={() => onOpenInfo('makers')}>Meet the makers</button>
                     <button type="button" onClick={onOpenCapture}>
@@ -236,9 +256,11 @@ function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenCapture, user
                 </nav>
                 <div className="home-signout">
                     {userEmail && <span className="home-signout-email">{userEmail}</span>}
-                    <button type="button" className="home-signout-btn" onClick={onSignOut}>
-                        Sign out
-                    </button>
+                    {canSignOut && (
+                        <button type="button" className="home-signout-btn" onClick={onSignOut}>
+                            Sign out
+                        </button>
+                    )}
                 </div>
             </section>
         </main>
@@ -323,6 +345,182 @@ function CaptureScreen({ onBack, onCapture }) {
             <BackButton onClick={onBack} light />
             <button type="button" className="capture-control" aria-label="Capture Jasmine" onClick={onCapture}></button>
         </main>
+    );
+}
+
+function TreeAnalysisScreen({ onBack }) {
+    const cameraInputRef = useRef(null);
+    const galleryInputRef = useRef(null);
+    const controllerRef = useRef(null);
+    const [previewUrl, setPreviewUrl] = useState('');
+    const [result, setResult] = useState(null);
+    const [imageMeta, setImageMeta] = useState(null);
+    const [lastFile, setLastFile] = useState(null);
+    const [status, setStatus] = useState('idle');
+    const [error, setError] = useState('');
+
+    useEffect(() => () => {
+        controllerRef.current?.abort();
+    }, []);
+
+    useEffect(() => () => {
+        if (previewUrl) {
+            URL.revokeObjectURL(previewUrl);
+        }
+    }, [previewUrl]);
+
+    const startAnalysis = useCallback(async (file) => {
+        if (!file) {
+            return;
+        }
+
+        if (!file.type.startsWith('image/')) {
+            setError('Choose an image file to analyze.');
+            setStatus('error');
+            return;
+        }
+
+        controllerRef.current?.abort();
+        const controller = new AbortController();
+        controllerRef.current = controller;
+
+        const nextPreviewUrl = URL.createObjectURL(file);
+        setPreviewUrl(nextPreviewUrl);
+        setLastFile(file);
+        setResult(null);
+        setImageMeta(null);
+        setError('');
+        setStatus('loading');
+
+        try {
+            const analysis = await analyzeTreePhoto(file, { signal: controller.signal });
+            setResult(analysis.result);
+            setImageMeta(analysis.image);
+            setStatus('done');
+        } catch (analysisError) {
+            if (analysisError?.name === 'AbortError') {
+                return;
+            }
+
+            setError(analysisError instanceof Error ? analysisError.message : 'Tree analysis failed.');
+            setStatus('error');
+        } finally {
+            if (controllerRef.current === controller) {
+                controllerRef.current = null;
+            }
+        }
+    }, []);
+
+    const handleFileChange = (event) => {
+        const [file] = event.target.files || [];
+        event.target.value = '';
+        startAnalysis(file);
+    };
+
+    const openCamera = () => cameraInputRef.current?.click();
+    const openGallery = () => galleryInputRef.current?.click();
+    const retry = () => startAnalysis(lastFile);
+    const loading = status === 'loading';
+
+    return (
+        <main className="prototype-shell tree-analysis-screen">
+            <BackButton onClick={onBack} />
+            <section className="tree-analysis-header">
+                <span className="plant-pill">
+                    <span className="leaf-icon"></span>
+                    Carbon valuation
+                </span>
+                <h1>Tree Scan</h1>
+            </section>
+            <section className="tree-capture-panel">
+                <div className={`tree-photo-preview${previewUrl ? ' has-image' : ''}`}>
+                    {previewUrl ? (
+                        <img src={previewUrl} alt="Selected tree preview" />
+                    ) : (
+                        <span className="tree-photo-placeholder" aria-hidden="true"></span>
+                    )}
+                    {loading && (
+                        <div className="tree-loading" role="status" aria-live="polite">
+                            <span className="tree-loading-spinner"></span>
+                            <strong>Analyzing tree...</strong>
+                        </div>
+                    )}
+                </div>
+                <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="tree-file-input"
+                    onChange={handleFileChange}
+                />
+                <input
+                    ref={galleryInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="tree-file-input"
+                    onChange={handleFileChange}
+                />
+                <div className="tree-capture-actions">
+                    <button type="button" className="tree-action-button tree-action-button--primary" onClick={openCamera} disabled={loading}>
+                        <span className="tree-action-icon tree-action-icon--camera" aria-hidden="true"></span>
+                        Open camera
+                    </button>
+                    <button type="button" className="tree-action-button" onClick={openGallery} disabled={loading}>
+                        <span className="tree-action-icon tree-action-icon--gallery" aria-hidden="true"></span>
+                        Select photo
+                    </button>
+                </div>
+                {imageMeta && (
+                    <p className="tree-image-meta">
+                        Uploaded {imageMeta.width}x{imageMeta.height} JPEG, {formatBytes(imageMeta.compressedBytes)}
+                    </p>
+                )}
+            </section>
+            {error && (
+                <section className="tree-error" role="alert">
+                    <strong>Analysis failed</strong>
+                    <p>{error}</p>
+                    {lastFile && (
+                        <button type="button" className="tree-retry-button" onClick={retry}>
+                            Retry analysis
+                        </button>
+                    )}
+                </section>
+            )}
+            {result && (
+                <TreeAnalysisResult result={result} />
+            )}
+        </main>
+    );
+}
+
+function TreeAnalysisResult({ result }) {
+    const valuation = result.carbon_valuation || {};
+    const fields = [
+        ['Tree name', result.tree_name],
+        ['Species', result.tree_species],
+        ['Confidence', formatConfidence(result.confidence)],
+        ['Initial carbon estimate', formatCurrency(result.carbon_credit_estimate)],
+        ['Refined carbon estimate', formatCurrency(valuation.refined_estimate)],
+        ['Uncertainty range', valuation.uncertainty_range],
+        ['Image summary', result.image_summary, 'wide'],
+        ['Methodology', valuation.methodology_notes, 'wide'],
+        ['Notes/caveats', result.notes, 'wide']
+    ];
+
+    return (
+        <section className="tree-results" aria-live="polite">
+            <h2>Analysis result</h2>
+            <div className="tree-result-grid">
+                {fields.map(([label, value, variant]) => (
+                    <div key={label} className={`tree-result-field${variant === 'wide' ? ' tree-result-field--wide' : ''}`}>
+                        <span>{label}</span>
+                        <strong>{displayValue(value)}</strong>
+                    </div>
+                ))}
+            </div>
+        </section>
     );
 }
 
@@ -622,6 +820,47 @@ function Pill({ label }) {
             {label}
         </span>
     );
+}
+
+function displayValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return 'Unavailable';
+    }
+
+    return value;
+}
+
+function formatBytes(value) {
+    if (!Number.isFinite(value)) {
+        return 'unknown size';
+    }
+
+    if (value < 1024 * 1024) {
+        return `${Math.round(value / 1024)} KB`;
+    }
+
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatConfidence(value) {
+    const confidence = Number(value);
+
+    if (!Number.isFinite(confidence)) {
+        return '';
+    }
+
+    const normalized = confidence <= 1 ? confidence * 100 : confidence;
+    return `${Math.round(normalized)}%`;
+}
+
+function formatCurrency(value) {
+    const amount = Number(value);
+
+    if (!Number.isFinite(amount)) {
+        return '';
+    }
+
+    return `$${amount.toFixed(2)}`;
 }
 
 function MicButton({ onClick, warning = false, listening = false, disabled = false }) {
