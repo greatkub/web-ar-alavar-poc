@@ -99,6 +99,8 @@ Don’t do this unless the site is one you trust or develop.
 
 2026-04-21: Added a clickable GreenCredit/Jasmine React prototype as the default app screen while preserving the live AR camera behind `?mode=ar`. Configuration impact: no backend changes; the root Vite URL now opens mocked prototype screens using existing static assets, and camera permission is only requested from `/?mode=ar`. Verification: run `cd ./examples && npm run build`, then open the printed Vite URL to navigate Home, Discover, AR capture, chat, Store, About, and Makers, and open the same origin with `?mode=ar` to confirm the original camera Start screen still appears.
 
+2026-04-21: Fixed the live AR character sprite cutout so pale face and hand pixels are not removed as background. Configuration impact: no server changes; `ARCamView` now flood-fills only sprite-sheet background connected to each atlas cell edge instead of globally keying every grey or white pixel. Verification: run `cd ./examples && npm run build`, open the live camera at `?mode=ar`, place the character, and confirm the face renders cleanly without camera pixels showing through the eyes or cheeks.
+
 
 ## Usage
 
