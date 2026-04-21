@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRealtimeAsrSession } from './asr/realtimeAsr.js';
 import { useMicrophone } from './microphone/index.js';
+import { createRealtimeTtsSession, prepareTtsAudio } from './tts/realtimeTts.js';
 import { supabase } from './supabase.js';
 import { SignInScreen } from './SignInScreen.jsx';
 
@@ -407,7 +408,11 @@ function ChatTranscript() {
     const [liveCaption, setLiveCaption] = useState('');
     const [asrStatus, setAsrStatus] = useState('idle');
     const [asrError, setAsrError] = useState('');
+    const [ttsStatus, setTtsStatus] = useState('idle');
+    const [ttsError, setTtsError] = useState('');
     const asrSessionRef = useRef(null);
+    const ttsSessionRef = useRef(null);
+    const stopListeningRef = useRef(null);
 
     const stopAsrSession = useCallback(() => {
         asrSessionRef.current?.stop();
@@ -415,10 +420,47 @@ function ChatTranscript() {
         setAsrStatus('idle');
     }, []);
 
+    const stopTtsSession = useCallback(() => {
+        ttsSessionRef.current?.stop();
+        ttsSessionRef.current = null;
+        setTtsStatus('idle');
+    }, []);
+
+    const speakTranscript = useCallback((transcript) => {
+        stopTtsSession();
+        setTtsError('');
+        setTtsStatus('connecting');
+
+        const session = createRealtimeTtsSession({
+            text: transcript,
+            onStatus: setTtsStatus,
+            onError: (message) => {
+                setTtsError(message);
+                setTtsStatus('error');
+            }
+        });
+
+        ttsSessionRef.current = session;
+        session.start()
+            .then(() => {
+                setLines(previousLines => [...previousLines, `Jasmine: ${transcript}`].slice(-8));
+                ttsSessionRef.current = null;
+            })
+            .catch((error) => {
+                const message = error instanceof Error ? error.message : 'Could not play Jasmine response.';
+                setTtsError(message);
+                setTtsStatus('error');
+                ttsSessionRef.current = null;
+            });
+    }, [stopTtsSession]);
+
     const handleStream = useCallback((stream) => {
         stopAsrSession();
+        stopTtsSession();
         setLiveCaption('');
         setAsrError('');
+        setTtsError('');
+        setTtsStatus('idle');
 
         const session = createRealtimeAsrSession({
             stream,
@@ -428,7 +470,10 @@ function ChatTranscript() {
             },
             onCompleted: (transcript) => {
                 setLiveCaption(transcript);
-                setLines(previousLines => [...previousLines, transcript].slice(-8));
+                setLines(previousLines => [...previousLines, `You: ${transcript}`].slice(-8));
+                stopAsrSession();
+                stopListeningRef.current?.();
+                speakTranscript(transcript);
             },
             onError: (message) => {
                 setAsrError(message);
@@ -442,20 +487,30 @@ function ChatTranscript() {
             setAsrError(message);
             setAsrStatus('error');
         });
-    }, [stopAsrSession]);
+    }, [speakTranscript, stopAsrSession, stopTtsSession]);
 
     const { isListening, startListening, stopListening } = useMicrophone({ onStream: handleStream });
 
-    useEffect(() => () => stopAsrSession(), [stopAsrSession]);
+    useEffect(() => {
+        stopListeningRef.current = stopListening;
+    }, [stopListening]);
+
+    useEffect(() => () => {
+        stopAsrSession();
+        stopTtsSession();
+    }, [stopAsrSession, stopTtsSession]);
 
     const handleMicClick = async () => {
         if (isListening) {
             stopAsrSession();
             stopListening();
         } else {
+            stopTtsSession();
             setAsrError('');
+            setTtsError('');
             setLiveCaption('');
             try {
+                await prepareTtsAudio();
                 await startListening();
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Microphone permission failed.';
@@ -465,24 +520,28 @@ function ChatTranscript() {
         }
     };
 
-    const overlayText = asrError || liveCaption || (asrStatus === 'connecting' ? 'Connecting ASR...' : 'Listening...');
-    const hasLiveCaption = Boolean(liveCaption && !asrError);
+    const isResponding = ttsStatus === 'connecting' || ttsStatus === 'speaking' || ttsStatus === 'playing';
+    const errorText = asrError || ttsError;
+    const overlayText = errorText || liveCaption || (asrStatus === 'connecting' ? 'Connecting ASR...' : 'Listening...');
+    const hasLiveCaption = Boolean(liveCaption && !errorText);
+    const overlayLabel = isResponding ? 'Jasmine is speaking...' : 'Listening...';
+    const micDisabled = isResponding;
 
     return (
-        <div className={`chat-transcript${isListening ? ' is-listening' : ''}${asrError ? ' has-error' : ''}`}>
+        <div className={`chat-transcript${isListening ? ' is-listening' : ''}${isResponding ? ' is-responding' : ''}${errorText ? ' has-error' : ''}`}>
             <div className="chat-transcript-lines" tabIndex={0} aria-label="Conversation transcript">
                 {lines.map((line, index) => (
                     <p key={`${line}-${index}`} className={index % 2 === 1 ? 'faded' : ''}>{line}</p>
                 ))}
-                {asrError && !isListening && (
-                    <p className="chat-transcript-error">{asrError}</p>
+                {errorText && !isListening && !isResponding && (
+                    <p className="chat-transcript-error">{errorText}</p>
                 )}
             </div>
-            <div className="chat-transcript-listening-overlay" aria-live="polite" aria-hidden={!isListening}>
-                {hasLiveCaption && <span className="asr-status-label">Listening...</span>}
+            <div className="chat-transcript-listening-overlay" aria-live="polite" aria-hidden={!isListening && !isResponding}>
+                {hasLiveCaption && <span className="asr-status-label">{overlayLabel}</span>}
                 <strong className={hasLiveCaption ? 'asr-caption' : ''}>{overlayText}</strong>
             </div>
-            <MicButton warning={Boolean(asrError)} listening={isListening} onClick={handleMicClick} />
+            <MicButton warning={Boolean(errorText)} listening={isListening} disabled={micDisabled} onClick={handleMicClick} />
         </div>
     );
 }
@@ -565,7 +624,7 @@ function Pill({ label }) {
     );
 }
 
-function MicButton({ onClick, warning = false, listening = false }) {
+function MicButton({ onClick, warning = false, listening = false, disabled = false }) {
     const classes = [
         'mic-button',
         warning && 'warning',
@@ -575,7 +634,7 @@ function MicButton({ onClick, warning = false, listening = false }) {
         .join(' ');
 
     return (
-        <button type="button" className={classes} onClick={onClick} aria-label={listening ? 'Stop listening' : 'Microphone'} aria-pressed={listening}>
+        <button type="button" className={classes} onClick={onClick} disabled={disabled} aria-label={listening ? 'Stop listening' : 'Microphone'} aria-pressed={listening}>
             <span></span>
         </button>
     );
