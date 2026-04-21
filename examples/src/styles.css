@@ -1017,8 +1017,15 @@ button {
     background: var(--orange);
 }
 
+.mic-button:disabled {
+    cursor: default;
+    opacity: 0.58;
+}
+
 .chat-transcript.is-listening .chat-transcript-heading,
-.chat-transcript.is-listening .chat-transcript-lines {
+.chat-transcript.is-listening .chat-transcript-lines,
+.chat-transcript.is-responding .chat-transcript-heading,
+.chat-transcript.is-responding .chat-transcript-lines {
     filter: blur(3px);
     opacity: 0.2;
     pointer-events: none;
@@ -1069,7 +1076,8 @@ button {
     line-height: 1.2;
 }
 
-.chat-transcript.is-listening .chat-transcript-listening-overlay {
+.chat-transcript.is-listening .chat-transcript-listening-overlay,
+.chat-transcript.is-responding .chat-transcript-listening-overlay {
     opacity: 1;
     transform: translateY(0);
 }
