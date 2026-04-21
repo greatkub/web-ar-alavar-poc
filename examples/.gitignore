@@ -2,3 +2,5 @@ ssl/*
 !public/index.html
 node_modules
 dist
+.env
+.env.local
