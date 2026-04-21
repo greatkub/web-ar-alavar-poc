@@ -128,23 +128,110 @@ class ARCamView
 
         const pixels = ctx.getImageData( 0, 0, canvas.width, canvas.height );
         const data = pixels.data;
+        const maxCellWidth = Math.ceil( canvas.width / this.sprite.columns );
+        const maxCellHeight = Math.ceil( canvas.height / this.sprite.rows );
+        const queue = new Int32Array( maxCellWidth * maxCellHeight );
+        const visited = new Uint8Array( maxCellWidth * maxCellHeight );
 
-        for( let i = 0; i < data.length; i += 4 )
+        const isBackgroundKeyCandidate = index =>
         {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
+            if( data[index + 3] < 16 )
+            {
+                return true;
+            }
+
+            const r = data[index];
+            const g = data[index + 1];
+            const b = data[index + 2];
             const max = Math.max( r, g, b );
             const min = Math.min( r, g, b );
             const chroma = max - min;
             const brightness = ( r + g + b ) / 3;
-            const neutral = chroma < 12;
-            const greySheetBackground = neutral && brightness >= 112 && brightness <= 202;
-            const whiteEmptyCell = neutral && brightness >= 238;
+            const neutral = chroma <= 14;
 
-            if( greySheetBackground || whiteEmptyCell )
+            return neutral && (
+                ( brightness >= 105 && brightness <= 210 ) ||
+                brightness >= 235
+            );
+        };
+
+        for( let cellRow = 0; cellRow < this.sprite.rows; cellRow++ )
+        {
+            for( let cellColumn = 0; cellColumn < this.sprite.columns; cellColumn++ )
             {
-                data[i + 3] = 0;
+                const x0 = Math.floor( cellColumn * canvas.width / this.sprite.columns );
+                const x1 = Math.floor( ( cellColumn + 1 ) * canvas.width / this.sprite.columns );
+                const y0 = Math.floor( cellRow * canvas.height / this.sprite.rows );
+                const y1 = Math.floor( ( cellRow + 1 ) * canvas.height / this.sprite.rows );
+                const cellWidth = x1 - x0;
+                const cellHeight = y1 - y0;
+                const cellSize = cellWidth * cellHeight;
+                let head = 0;
+                let tail = 0;
+
+                visited.fill( 0, 0, cellSize );
+
+                const getPixelIndex = localIndex =>
+                {
+                    const y = Math.floor( localIndex / cellWidth );
+                    const x = localIndex - y * cellWidth;
+
+                    return ( ( y0 + y ) * canvas.width + x0 + x ) * 4;
+                };
+
+                const enqueue = localIndex =>
+                {
+                    if( visited[localIndex] )
+                    {
+                        return;
+                    }
+
+                    if( !isBackgroundKeyCandidate( getPixelIndex( localIndex ) ) )
+                    {
+                        return;
+                    }
+
+                    visited[localIndex] = 1;
+                    queue[tail++] = localIndex;
+                };
+
+                for( let x = 0; x < cellWidth; x++ )
+                {
+                    enqueue( x );
+                    enqueue( ( cellHeight - 1 ) * cellWidth + x );
+                }
+
+                for( let y = 1; y < cellHeight - 1; y++ )
+                {
+                    enqueue( y * cellWidth );
+                    enqueue( y * cellWidth + cellWidth - 1 );
+                }
+
+                while( head < tail )
+                {
+                    const localIndex = queue[head++];
+                    const x = localIndex % cellWidth;
+                    const y = ( localIndex - x ) / cellWidth;
+
+                    data[getPixelIndex( localIndex ) + 3] = 0;
+
+                    if( x > 0 )
+                    {
+                        enqueue( localIndex - 1 );
+                    }
+                    if( x < cellWidth - 1 )
+                    {
+                        enqueue( localIndex + 1 );
+                    }
+                    if( y > 0 )
+                    {
+                        enqueue( localIndex - cellWidth );
+                    }
+                    if( y < cellHeight - 1 )
+                    {
+                        enqueue( localIndex + cellWidth );
+                    }
+                }
             }
         }
 
