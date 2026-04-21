@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRealtimeAsrSession } from './asr/realtimeAsr.js';
 import { useMicrophone } from './microphone/index.js';
 import { createRealtimeTtsSession, prepareTtsAudio } from './tts/realtimeTts.js';
+import { supabase } from './supabase.js';
+import { SignInScreen } from './SignInScreen.jsx';
 
 function ScreenTransition({ direction, screenKey, suppressAnimation, children }) {
     const suppress = suppressAnimation ? ' screen-transition--suppress' : '';
@@ -56,14 +58,45 @@ const PLANTS = [
 
 const CREDITS = '1,240';
 
+function useAuth() {
+    const [session, setSession] = useState(undefined);
+
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => {
+            setSession(data.session ?? null);
+        });
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+            setSession(newSession ?? null);
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+    return session;
+}
+
 function App() {
+    const session = useAuth();
     const isLiveAr = useMemo(() => new URLSearchParams(window.location.search).get('mode') === 'ar', []);
+
+    if (session === undefined) {
+        return (
+            <div className="signin-loading">
+                <span className="signin-loading-dot" />
+            </div>
+        );
+    }
+
+    if (!session) {
+        return <SignInScreen />;
+    }
 
     if (isLiveAr) {
         return <LiveCameraDemo />;
     }
 
-    return <GreenCreditPrototype />;
+    return <GreenCreditPrototype session={session} />;
 }
 
 function LiveCameraDemo() {
@@ -98,7 +131,10 @@ function LiveCameraDemo() {
     );
 }
 
-function GreenCreditPrototype() {
+function GreenCreditPrototype({ session }) {
+    const handleSignOut = useCallback(async () => {
+        await supabase.auth.signOut();
+    }, []);
     const [activeScreen, setActiveScreen] = useState('home');
     const [navDirection, setNavDirection] = useState('forward');
     const [hasNavigated, setHasNavigated] = useState(false);
@@ -164,6 +200,8 @@ function GreenCreditPrototype() {
                     setCaptureReturnScreen('home');
                     navigate('capture', 'forward');
                 }}
+                userEmail={session?.user?.email}
+                onSignOut={handleSignOut}
             />
         );
     }
@@ -179,7 +217,7 @@ function GreenCreditPrototype() {
     );
 }
 
-function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenCapture }) {
+function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenCapture, userEmail, onSignOut }) {
     return (
         <main className="prototype-shell home-screen">
             <section className="home-content">
@@ -196,6 +234,12 @@ function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenCapture }) {
                         Live AR camera
                     </button>
                 </nav>
+                <div className="home-signout">
+                    {userEmail && <span className="home-signout-email">{userEmail}</span>}
+                    <button type="button" className="home-signout-btn" onClick={onSignOut}>
+                        Sign out
+                    </button>
+                </div>
             </section>
         </main>
     );
