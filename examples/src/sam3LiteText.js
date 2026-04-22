@@ -1,15 +1,34 @@
 import { compressImageToDataUrl } from './treeAnalysis.js';
 
-const SAM3_LITETEXT_URL = import.meta.env.VITE_SAM3_LITETEXT_URL ||
-    'https://web-ar-alavar-poc-fastapi-production.up.railway.app/sam3-litetext/segment';
-const SAM3_LITETEXT_CLIENT_TOKEN = (
-    import.meta.env.VITE_SAM3_LITETEXT_CLIENT_TOKEN ||
-    import.meta.env.VITE_API_AUTH_TOKEN ||
-    ''
-).trim();
-const SAM3_LITETEXT_MODEL = import.meta.env.VITE_SAM3_LITETEXT_MODEL || 'yonigozlan/sam3-litetext-s0';
-const DEFAULT_THRESHOLD = Number(import.meta.env.VITE_SAM3_LITETEXT_THRESHOLD || 0.5);
-const DEFAULT_MASK_THRESHOLD = Number(import.meta.env.VITE_SAM3_LITETEXT_MASK_THRESHOLD || 0.5);
+const BROWSER_SEGMENTATION_MODEL = import.meta.env.VITE_BROWSER_SEGMENTATION_MODEL ||
+    'Xenova/segformer-b0-finetuned-ade-512-512';
+const BROWSER_SEGMENTATION_DEVICE = import.meta.env.VITE_BROWSER_SEGMENTATION_DEVICE || 'auto';
+const BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH || 960);
+const BROWSER_SEGMENTATION_IMAGE_QUALITY = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_JPEG_QUALITY || 0.82);
+const DEFAULT_THRESHOLD = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_THRESHOLD || 0.5);
+const DEFAULT_MASK_THRESHOLD = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_MASK_THRESHOLD || 0.5);
+
+const VEGETATION_LABELS = new Map([
+    ['tree', ['tree']],
+    ['trees', ['tree']],
+    ['plant', ['plant', 'tree', 'grass', 'flower', 'palm']],
+    ['plants', ['plant', 'tree', 'grass', 'flower', 'palm']],
+    ['grass', ['grass']],
+    ['flower', ['flower']],
+    ['flowers', ['flower']],
+    ['palm', ['palm']],
+    ['bush', ['plant', 'tree']],
+    ['bushes', ['plant', 'tree']],
+    ['shrub', ['plant', 'tree']],
+    ['shrubs', ['plant', 'tree']],
+    ['leaf', ['plant', 'tree', 'grass', 'flower', 'palm']],
+    ['leaves', ['plant', 'tree', 'grass', 'flower', 'palm']],
+    ['foliage', ['plant', 'tree', 'grass', 'flower', 'palm']],
+    ['vegetation', ['plant', 'tree', 'grass', 'flower', 'palm']]
+]);
+
+let transformersModulePromise = null;
+const segmenterCache = new Map();
 
 const OUTPUT_KEYS = [
     'result',
@@ -63,32 +82,214 @@ function boundedNumber(value, fallback, min, max) {
     return Math.min(max, Math.max(min, numeric));
 }
 
-function errorDetail(body) {
-    if (!body) {
-        return '';
+function hasWebGpu() {
+    return Boolean(globalThis.navigator?.gpu && globalThis.isSecureContext);
+}
+
+function resolveBrowserDevice() {
+    const configuredDevice = String(BROWSER_SEGMENTATION_DEVICE || 'auto').toLowerCase();
+
+    if (configuredDevice === 'auto' || configuredDevice === 'gpu') {
+        return hasWebGpu() ? 'webgpu' : 'cpu';
     }
 
-    if (typeof body === 'string') {
-        return body;
+    if (configuredDevice === 'wasm') {
+        return 'cpu';
     }
 
-    if (typeof body.detail === 'string') {
-        return body.detail;
+    return configuredDevice;
+}
+
+function displayDevice(device) {
+    return device === 'cpu' ? 'WASM' : device.toUpperCase();
+}
+
+export function getOnDeviceSegmentationStatus() {
+    const device = resolveBrowserDevice();
+
+    return {
+        mode: 'browser',
+        webgpu: hasWebGpu(),
+        device,
+        deviceLabel: displayDevice(device),
+        model: BROWSER_SEGMENTATION_MODEL
+    };
+}
+
+function abortError() {
+    if (typeof DOMException !== 'undefined') {
+        return new DOMException('Segmentation was cancelled.', 'AbortError');
     }
 
-    if (body.detail?.message) {
-        return body.detail.message;
+    const error = new Error('Segmentation was cancelled.');
+    error.name = 'AbortError';
+    return error;
+}
+
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        throw abortError();
+    }
+}
+
+async function loadTransformersModule() {
+    if (!transformersModulePromise) {
+        transformersModulePromise = import('@huggingface/transformers').then(module => {
+            module.env.allowLocalModels = false;
+            return module;
+        });
     }
 
-    if (body.error) {
-        return typeof body.error === 'string' ? body.error : JSON.stringify(body.error);
+    return transformersModulePromise;
+}
+
+async function loadSegmenter(device) {
+    const key = `${BROWSER_SEGMENTATION_MODEL}:${device}`;
+    const cached = segmenterCache.get(key);
+
+    if (cached) {
+        return cached;
     }
 
-    if (body.message) {
-        return body.message;
+    const promise = loadTransformersModule()
+        .then(({ pipeline }) => pipeline('image-segmentation', BROWSER_SEGMENTATION_MODEL, { device }))
+        .catch(error => {
+            segmenterCache.delete(key);
+            throw error;
+        });
+
+    segmenterCache.set(key, promise);
+    return promise;
+}
+
+function normalizeLabel(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function requestedLabelsFromPrompt(prompt) {
+    const normalized = normalizeLabel(prompt);
+    const words = normalized.split(/\s+/).filter(Boolean);
+    const requested = new Set();
+
+    for (const word of words) {
+        const mappedLabels = VEGETATION_LABELS.get(word);
+
+        if (mappedLabels) {
+            mappedLabels.forEach(label => requested.add(label));
+            continue;
+        }
+
+        requested.add(word);
     }
 
-    return '';
+    if (!requested.size) {
+        ['plant', 'tree', 'grass', 'flower', 'palm'].forEach(label => requested.add(label));
+    }
+
+    return requested;
+}
+
+function labelMatchesPrompt(label, promptLabels) {
+    const normalized = normalizeLabel(label);
+
+    if (!normalized) {
+        return false;
+    }
+
+    for (const promptLabel of promptLabels) {
+        if (normalized === promptLabel || normalized.includes(promptLabel) || promptLabel.includes(normalized)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function maskPixelValue(mask, pixel) {
+    const channels = Number(mask?.channels || 1);
+    const data = mask?.data;
+
+    if (!data) {
+        return 0;
+    }
+
+    if (channels === 1) {
+        return Number(data[pixel] || 0) > 0 ? 1 : 0;
+    }
+
+    const offset = pixel * channels;
+    let total = 0;
+
+    for (let channel = 0; channel < channels; channel += 1) {
+        total += Number(data[offset + channel] || 0);
+    }
+
+    return total > 0 ? 1 : 0;
+}
+
+function encodeRawImageMask(mask) {
+    const width = Number(mask?.width);
+    const height = Number(mask?.height);
+
+    if (!mask?.data || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+    }
+
+    const counts = [];
+    let currentValue = 0;
+    let runLength = 0;
+    let area = 0;
+
+    for (let x = 0; x < width; x += 1) {
+        for (let y = 0; y < height; y += 1) {
+            const pixel = y * width + x;
+            const value = maskPixelValue(mask, pixel);
+
+            if (value) {
+                area += 1;
+            }
+
+            if (value === currentValue) {
+                runLength += 1;
+                continue;
+            }
+
+            counts.push(runLength);
+            currentValue = value;
+            runLength = 1;
+        }
+    }
+
+    counts.push(runLength);
+
+    return {
+        rle: {
+            counts,
+            size: [height, width]
+        },
+        area
+    };
+}
+
+function summarizePipelineSegment(segment, index, promptLabels) {
+    const encoded = encodeRawImageMask(segment.mask);
+    const label = segment.label || `segment-${index + 1}`;
+
+    return {
+        index,
+        label,
+        score: asNumericScore(segment.score),
+        matched_prompt: labelMatchesPrompt(label, promptLabels),
+        mask: encoded ? {
+            width: Number(segment.mask.width),
+            height: Number(segment.mask.height),
+            channels: Number(segment.mask.channels || 1),
+            area_pixels: encoded.area
+        } : null
+    };
 }
 
 function outputCandidates(output) {
@@ -268,7 +469,9 @@ function flattenRows(rows) {
 }
 
 function flattenValues(values, width, height) {
-    if (!Array.isArray(values) || !Number.isFinite(width) || !Number.isFinite(height)) {
+    const isArrayLike = Array.isArray(values) || ArrayBuffer.isView(values);
+
+    if (!isArrayLike || !Number.isFinite(width) || !Number.isFinite(height)) {
         return null;
     }
 
@@ -427,45 +630,111 @@ export async function analyzeSam3LiteTextPhoto(file, {
         throw new Error('Enter a segmentation prompt.');
     }
 
-    const image = await compressImageToDataUrl(file);
-    const headers = {
-        'Content-Type': 'application/json'
-    };
-
-    if (SAM3_LITETEXT_CLIENT_TOKEN) {
-        headers.Authorization = `Bearer ${SAM3_LITETEXT_CLIENT_TOKEN}`;
-    }
-
-    const response = await fetch(SAM3_LITETEXT_URL, {
-        method: 'POST',
-        headers,
-        signal,
-        body: JSON.stringify({
-            image: image.dataUrl,
-            text: prompt,
-            prompt,
-            model: SAM3_LITETEXT_MODEL,
-            threshold: boundedNumber(threshold, DEFAULT_THRESHOLD, 0.01, 0.99),
-            mask_threshold: boundedNumber(maskThreshold, DEFAULT_MASK_THRESHOLD, 0.01, 0.99),
-            return_json: true
-        })
+    const image = await compressImageToDataUrl(file, {
+        maxWidth: BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH,
+        quality: BROWSER_SEGMENTATION_IMAGE_QUALITY
     });
+    const promptLabels = requestedLabelsFromPrompt(prompt);
+    const requestedDevice = resolveBrowserDevice();
+    const normalizedThreshold = boundedNumber(threshold, DEFAULT_THRESHOLD, 0.01, 0.99);
+    const normalizedMaskThreshold = boundedNumber(maskThreshold, DEFAULT_MASK_THRESHOLD, 0.01, 0.99);
+    let activeDevice = requestedDevice;
+    let fallbackReason = '';
 
-    if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        const detail = errorDetail(body);
+    throwIfAborted(signal);
 
-        if (response.status === 401 && !SAM3_LITETEXT_CLIENT_TOKEN) {
-            throw new Error('SAM3-LiteText requires a backend auth token. Set VITE_SAM3_LITETEXT_CLIENT_TOKEN and try again.');
+    let segmenter;
+
+    try {
+        segmenter = await loadSegmenter(activeDevice);
+    } catch (loadError) {
+        if (activeDevice !== 'webgpu' || BROWSER_SEGMENTATION_DEVICE === 'webgpu') {
+            throw loadError;
         }
 
-        throw new Error(detail || `SAM3-LiteText request failed with status ${response.status}.`);
+        fallbackReason = loadError instanceof Error ? loadError.message : 'WebGPU model load failed.';
+        activeDevice = 'cpu';
+        segmenter = await loadSegmenter(activeDevice);
+    }
+
+    throwIfAborted(signal);
+
+    let pipelineOutput;
+
+    try {
+        pipelineOutput = await segmenter(image.dataUrl, {
+            threshold: normalizedThreshold,
+            mask_threshold: normalizedMaskThreshold
+        });
+    } catch (runError) {
+        if (activeDevice !== 'webgpu' || BROWSER_SEGMENTATION_DEVICE === 'webgpu') {
+            throw runError;
+        }
+
+        fallbackReason = runError instanceof Error ? runError.message : 'WebGPU inference failed.';
+        activeDevice = 'cpu';
+        const wasmSegmenter = await loadSegmenter(activeDevice);
+        pipelineOutput = await wasmSegmenter(image.dataUrl, {
+            threshold: normalizedThreshold,
+            mask_threshold: normalizedMaskThreshold
+        });
+    }
+
+    throwIfAborted(signal);
+
+    const allSegments = Array.isArray(pipelineOutput) ? pipelineOutput : [];
+    const matchingSegments = allSegments
+        .filter(segment => labelMatchesPrompt(segment.label, promptLabels))
+        .map((segment, index) => {
+            const encoded = encodeRawImageMask(segment.mask);
+
+            return {
+                index,
+                label: segment.label || `segment-${index + 1}`,
+                score: asNumericScore(segment.score),
+                mask: encoded?.rle || null,
+                area_pixels: encoded?.area || 0
+            };
+        })
+        .filter(segment => segment.mask)
+        .sort((left, right) => right.area_pixels - left.area_pixels);
+
+    const compactOutput = {
+        ok: true,
+        runtime: 'browser',
+        pipeline: 'Transformers.js image-segmentation',
+        model: BROWSER_SEGMENTATION_MODEL,
+        device: activeDevice,
+        device_label: displayDevice(activeDevice),
+        webgpu_available: hasWebGpu(),
+        text: prompt,
+        prompt,
+        threshold: normalizedThreshold,
+        mask_threshold: normalizedMaskThreshold,
+        image_size: {
+            width: image.width,
+            height: image.height
+        },
+        requested_labels: Array.from(promptLabels),
+        num_objects: matchingSegments.length,
+        returned_objects: matchingSegments.length,
+        has_objects: matchingSegments.length > 0,
+        segments: matchingSegments,
+        raw_model_output: {
+            total_segments: allSegments.length,
+            segments: allSegments.map((segment, index) => summarizePipelineSegment(segment, index, promptLabels))
+        }
+    };
+
+    if (fallbackReason) {
+        compactOutput.fallback_reason = fallbackReason;
     }
 
     return {
-        result: await response.json(),
+        result: compactOutput,
         image,
-        endpoint: SAM3_LITETEXT_URL,
-        model: SAM3_LITETEXT_MODEL
+        endpoint: 'browser',
+        model: BROWSER_SEGMENTATION_MODEL,
+        device: activeDevice
     };
 }

@@ -9,6 +9,7 @@ import {
     analyzeSam3LiteTextPhoto,
     drawSam3LiteTextMasks,
     getSam3LiteTextOverlayUrl,
+    getOnDeviceSegmentationStatus,
     summarizeSam3LiteTextOutput
 } from './sam3LiteText.js';
 
@@ -584,6 +585,7 @@ function Sam3LiteTextScreen({ onBack }) {
     const cameraInputRef = useRef(null);
     const galleryInputRef = useRef(null);
     const controllerRef = useRef(null);
+    const runtimeInfo = useMemo(() => getOnDeviceSegmentationStatus(), []);
     const [prompt, setPrompt] = useState('tree or plant');
     const [threshold, setThreshold] = useState(0.5);
     const [maskThreshold, setMaskThreshold] = useState(0.5);
@@ -656,7 +658,8 @@ function Sam3LiteTextScreen({ onBack }) {
             setImageMeta({
                 ...analysis.image,
                 endpoint: analysis.endpoint,
-                model: analysis.model
+                model: analysis.model,
+                device: analysis.device
             });
             setStatus('done');
         } catch (segmentationError) {
@@ -664,7 +667,7 @@ function Sam3LiteTextScreen({ onBack }) {
                 return;
             }
 
-            setError(segmentationError instanceof Error ? segmentationError.message : 'SAM3-LiteText request failed.');
+            setError(segmentationError instanceof Error ? segmentationError.message : 'Browser segmentation failed.');
             setStatus('error');
         } finally {
             if (controllerRef.current === controller) {
@@ -689,9 +692,9 @@ function Sam3LiteTextScreen({ onBack }) {
             <section className="sam3-header">
                 <span className="plant-pill">
                     <span className="leaf-icon"></span>
-                    SAM3-LiteText
+                    Browser segmentation
                 </span>
-                <h1>Prompt segmentation</h1>
+                <h1>Plant mask on device</h1>
             </section>
             <section className="sam3-workbench">
                 <Sam3LiteTextPreview previewUrl={previewUrl} result={result} loading={loading} />
@@ -757,11 +760,14 @@ function Sam3LiteTextScreen({ onBack }) {
                 </div>
                 <button type="button" className="sam3-run-button" onClick={runSegmentation} disabled={!canRun}>
                     <span className="sam3-run-icon" aria-hidden="true"></span>
-                    Run segmentation
+                    Run on device
                 </button>
+                <p className="tree-image-meta">
+                    Runtime {runtimeInfo.deviceLabel}, {runtimeInfo.webgpu ? 'WebGPU available' : 'WASM fallback'}
+                </p>
                 {imageMeta && (
                     <p className="tree-image-meta">
-                        Sent {imageMeta.width}x{imageMeta.height} JPEG, {formatBytes(imageMeta.compressedBytes)}
+                        Processed {imageMeta.width}x{imageMeta.height} JPEG, {formatBytes(imageMeta.compressedBytes)}
                     </p>
                 )}
             </section>
@@ -817,7 +823,7 @@ function Sam3LiteTextPreview({ previewUrl, result, loading }) {
             {loading && (
                 <div className="tree-loading" role="status" aria-live="polite">
                     <span className="tree-loading-spinner"></span>
-                    <strong>Segmenting...</strong>
+                    <strong>Loading local model...</strong>
                 </div>
             )}
         </div>
@@ -850,7 +856,7 @@ function Sam3LiteTextSummary({ summary }) {
 function Sam3LiteTextRawOutput({ result }) {
     return (
         <details className="sam3-raw-output" open>
-            <summary>Original model output JSON</summary>
+            <summary>Model output JSON</summary>
             <pre>{JSON.stringify(result, null, 2)}</pre>
         </details>
     );
