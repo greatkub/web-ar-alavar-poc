@@ -1,5 +1,9 @@
+const API_BASE_URL = 'https://web-ar-alavar-poc-fastapi-production.up.railway.app';
+
 const TREE_ANALYSIS_URL = import.meta.env.VITE_TREE_ANALYSIS_URL ||
-    'https://web-ar-alavar-poc-fastapi-production.up.railway.app/tree/analyze';
+    `${API_BASE_URL}/tree/analyze`;
+const PLANT_AVATAR_PROMPT_URL = import.meta.env.VITE_PLANT_AVATAR_PROMPT_URL ||
+    `${API_BASE_URL}/plant/avatar/prompt`;
 const TREE_ANALYSIS_CLIENT_TOKEN = (
     import.meta.env.VITE_TREE_ANALYSIS_CLIENT_TOKEN ||
     import.meta.env.VITE_API_AUTH_TOKEN ||
@@ -132,7 +136,7 @@ export async function analyzeTreePhoto(file, { signal } = {}) {
         signal,
         body: JSON.stringify({
             image: image.dataUrl,
-            model: 'qwen3.6-plus',
+            model: 'qwen3.6-flash',
             region: 'international',
             enable_thinking: true,
             use_image_search: false
@@ -154,4 +158,36 @@ export async function analyzeTreePhoto(file, { signal } = {}) {
         result: await response.json(),
         image
     };
+}
+
+export async function fetchPlantAvatarPrompt(treeResult, { language = 'en', signal } = {}) {
+    const plantName = treeResult.tree_name || treeResult.tree_species || 'Unknown plant';
+    const carbonKgPerYear = Number(treeResult.carbon_credit_estimate) || 0;
+
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+
+    if (TREE_ANALYSIS_CLIENT_TOKEN) {
+        headers.Authorization = `Bearer ${TREE_ANALYSIS_CLIENT_TOKEN}`;
+    }
+
+    const response = await fetch(PLANT_AVATAR_PROMPT_URL, {
+        method: 'POST',
+        headers,
+        signal,
+        body: JSON.stringify({
+            plant_name: plantName,
+            carbon_kg_per_year: carbonKgPerYear,
+            language
+        })
+    });
+
+    if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        const detail = errorDetail(body);
+        throw new Error(detail || `Avatar prompt fetch failed with status ${response.status}.`);
+    }
+
+    return response.json();
 }

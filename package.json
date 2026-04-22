@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@huggingface/transformers": "^4.1.0",
     "@supabase/supabase-js": "^2.104.0"
   }
 }

@@ -80,7 +80,8 @@ export default defineConfig( {
         host: '0.0.0.0',
         port: 5174,
         headers: crossOriginIsolationHeaders,
-        https: httpsConfig
+        https: httpsConfig,
+        allowedHosts: true
     },
     preview: {
         host: '0.0.0.0',

@@ -4,7 +4,9 @@ import { useMicrophone } from './microphone/index.js';
 import { createRealtimeTtsSession, prepareTtsAudio } from './tts/realtimeTts.js';
 import { isSupabaseConfigured, supabase } from './supabase.js';
 import { SignInScreen } from './SignInScreen.jsx';
-import { analyzeTreePhoto } from './treeAnalysis.js';
+import { analyzeTreePhoto, fetchPlantAvatarPrompt } from './treeAnalysis.js';
+import { initializeCameraDemo } from './cameraDemo.js';
+import { Stats } from '../public/assets/stats.js';
 import {
     analyzeSam3LiteTextPhoto,
     drawSam3LiteTextMasks,
@@ -212,6 +214,7 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
     const [captureReturnScreen, setCaptureReturnScreen] = useState('detail');
     const [chatBackScreen, setChatBackScreen] = useState('detail');
     const [chatEnterSlideUp, setChatEnterSlideUp] = useState(false);
+    const [captureAnalysisResult, setCaptureAnalysisResult] = useState(null);
 
     const navigate = useCallback((screen, direction) => {
         setHasNavigated(true);
@@ -244,7 +247,10 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
         body = (
             <CaptureScreen
                 onBack={() => navigate(captureReturnScreen, 'back')}
-                onCapture={() => goChat('intro', 'capture', { slideUpPanel: true })}
+                onCapture={(result) => {
+                    setCaptureAnalysisResult(result);
+                    goChat('intro', 'capture', { slideUpPanel: true });
+                }}
             />
         );
     } else if (activeScreen === 'chat') {
@@ -254,6 +260,7 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
                 setChatState={setChatState}
                 onBack={() => navigate(chatBackScreen, 'back')}
                 slideUpPanel={chatEnterSlideUp}
+                analysisResult={captureAnalysisResult}
             />
         );
     } else if (activeScreen === 'store') {
@@ -274,6 +281,12 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
                     setCaptureReturnScreen('home');
                     navigate('capture', 'forward');
                 }}
+                onTestAvatar={async () => {
+                    const fixedTreeResult = { tree_name: 'Jasmine', carbon_credit_estimate: 45 };
+                    const avatarPrompt = await fetchPlantAvatarPrompt(fixedTreeResult).catch(() => null);
+                    setCaptureAnalysisResult({ ...fixedTreeResult, avatarPrompt });
+                    goChat('intro', 'home', { slideUpPanel: true });
+                }}
                 userEmail={session?.user?.email}
                 onSignOut={handleSignOut}
                 canSignOut={isSupabaseConfigured}
@@ -292,13 +305,25 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
     );
 }
 
-function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenSam3LiteText, onOpenCapture, userEmail, onSignOut, canSignOut }) {
+function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenSam3LiteText, onOpenCapture, onTestAvatar, userEmail, onSignOut, canSignOut }) {
+    const [testingAvatar, setTestingAvatar] = useState(false);
+
+    const handleTestAvatar = async () => {
+        if (testingAvatar) return;
+        setTestingAvatar(true);
+        try {
+            await onTestAvatar();
+        } finally {
+            setTestingAvatar(false);
+        }
+    };
+
     return (
         <main className="prototype-shell home-screen">
             <section className="home-content">
                 <h1>GreenCredit</h1>
                 <div className="home-menu" aria-label="GreenCredit menu">
-                    <MenuCard title="Discover" caption="Befriend and interact with plants" onClick={onOpenDetail} />
+                    <MenuCard title="Discover" caption="Befriend and interact with plants" onClick={onOpenCapture} />
                     <MenuCard title="Greenhouse" caption="See the collections of your plants" onClick={onOpenDetail} />
                     <MenuCard title="Store" caption="Earn credits and shop sustainably" onClick={onOpenStore} />
                 </div>
@@ -309,6 +334,9 @@ function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis,
                     <button type="button" onClick={() => onOpenInfo('makers')}>Meet the makers</button>
                     <button type="button" onClick={onOpenCapture}>
                         Live AR camera
+                    </button>
+                    <button type="button" onClick={handleTestAvatar} disabled={testingAvatar}>
+                        {testingAvatar ? 'Loading avatar…' : 'Test avatar prompt'}
                     </button>
                 </nav>
                 <div className="home-signout">
@@ -397,10 +425,115 @@ function PlantDetailScreen({ onBack, onCapture, onTalk }) {
 }
 
 function CaptureScreen({ onBack, onCapture }) {
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    const [status, setStatus] = useState('idle');
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        let cancelled = false;
+
+        navigator.mediaDevices
+            .getUserMedia({ video: { facingMode: 'environment' } })
+            .then((stream) => {
+                if (cancelled) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
+                }
+                streamRef.current = stream;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setError('Camera access denied. Please allow camera permission and try again.');
+                    setStatus('error');
+                }
+            });
+
+        return () => {
+            cancelled = true;
+            streamRef.current?.getTracks().forEach((t) => t.stop());
+            streamRef.current = null;
+        };
+    }, []);
+
+    const handleCapture = async () => {
+        const video = videoRef.current;
+        if (!video || status === 'validating' || status === 'analyzing') {
+            return;
+        }
+
+        setError('');
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const blob = await new Promise((resolve) =>
+            canvas.toBlob(resolve, 'image/jpeg', 0.85)
+        );
+        const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+
+        try {
+            setStatus('validating');
+            const segmentation = await analyzeSam3LiteTextPhoto(file, { text: 'tree or plant' });
+
+            if (!segmentation.result.has_objects) {
+                setError('No plant or tree detected. Try again.');
+                setStatus('error');
+                return;
+            }
+
+            setStatus('analyzing');
+            const analysis = await analyzeTreePhoto(file);
+
+            setStatus('fetching');
+            const avatarPrompt = await fetchPlantAvatarPrompt(analysis.result).catch(() => null);
+
+            onCapture({ ...analysis.result, avatarPrompt });
+        } catch (captureError) {
+            setError(captureError instanceof Error ? captureError.message : 'Analysis failed. Please try again.');
+            setStatus('error');
+        }
+    };
+
+    const busy = status === 'validating' || status === 'analyzing' || status === 'fetching';
+    const statusLabel =
+        status === 'validating' ? 'Detecting plant…' :
+            status === 'analyzing' ? 'Analyzing…' :
+                status === 'fetching' ? 'Preparing avatar…' : '';
+
     return (
-        <main className="capture-screen foliage-scene">
+        <main className="capture-screen">
+            <video
+                ref={videoRef}
+                className="capture-video"
+                autoPlay
+                playsInline
+                muted
+            />
             <BackButton onClick={onBack} light />
-            <button type="button" className="capture-control" aria-label="Capture Jasmine" onClick={onCapture}></button>
+            {busy && (
+                <div className="capture-status" role="status" aria-live="polite">
+                    <span className="tree-loading-spinner"></span>
+                    <span>{statusLabel}</span>
+                </div>
+            )}
+            {error && (
+                <div className="capture-error" role="alert">
+                    {error}
+                </div>
+            )}
+            <button
+                type="button"
+                className="capture-control"
+                aria-label="Capture plant"
+                onClick={handleCapture}
+                disabled={busy}
+            ></button>
         </main>
     );
 }
@@ -869,7 +1002,33 @@ function Sam3LiteTextRawOutput({ result }) {
     );
 }
 
-function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false }) {
+function CameraDemoBackground() {
+    const initializedRef = useRef(false);
+
+    useEffect(() => {
+        if (initializedRef.current) return;
+        initializedRef.current = true;
+
+        initializeCameraDemo();
+        document.getElementById('start_button')?.click();
+
+        return () => {
+            Stats.el?.remove();
+        };
+    }, []);
+
+    return (
+        <div id="container" className="camera-demo-bg" aria-hidden="true">
+            <div id="overlay">
+                <div id="splash"></div>
+                <button id="start_button" type="button" style={{ display: 'none' }}>Start</button>
+            </div>
+            <div id="gesture_status" data-action=""><span></span></div>
+        </div>
+    );
+}
+
+function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false, analysisResult, avatarPrompt }) {
     const [panelSlideIn, setPanelSlideIn] = useState(!slideUpPanel);
     const [careAnimation, setCareAnimation] = useState(null);
 
@@ -913,11 +1072,6 @@ function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false }) {
                 {careAnimation === 'sun' && (
                     <div className="care-effect care-effect--sun" aria-hidden="true"></div>
                 )}
-                <img
-                    className={`chat-character${careAnimation ? ' chat-character--joy' : ''}`}
-                    src={ASSETS.character}
-                    alt="Jasmine character"
-                />
                 <BackButton onClick={onBack} light />
                 <CreditPill />
                 {chatState !== 'intro' && (
@@ -928,20 +1082,33 @@ function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false }) {
                 )}
             </section>
             <section className={panelClassName}>
-                {chatState === 'intro' && <ChatIntro onTalk={() => setChatState('speaking')} />}
+                {chatState === 'intro' && <ChatIntro onTalk={() => setChatState('speaking')} analysisResult={analysisResult} />}
                 {chatState === 'speaking' && <ChatTranscript />}
             </section>
         </main>
     );
 }
 
-function ChatIntro({ onTalk }) {
+function ChatIntro({ onTalk, analysisResult }) {
+    const name = analysisResult?.tree_name || analysisResult?.tree_species;
+
     return (
         <div className="chat-intro">
-            <h2>Jasmine</h2>
-            <p>Native plants help increase green spaces and absorb carbon.</p>
-            <Pill label="Moderate" />
-            <button type="button" className="text-link" onClick={onTalk}>Talk to Jasmine</button>
+            {name ? (
+                <>
+                    <h2>{name}</h2>
+                    {analysisResult?.image_summary && (
+                        <p>{analysisResult.image_summary}</p>
+                    )}
+                </>
+            ) : (
+                <>
+                    <h2>Jasmine</h2>
+                    <p>Native plants help increase green spaces and absorb carbon.</p>
+                    <Pill label="Moderate" />
+                </>
+            )}
+            <button type="button" className="text-link" onClick={onTalk}>Talk to {name}</button>
         </div>
     );
 }
