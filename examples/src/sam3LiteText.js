@@ -7,6 +7,7 @@ const BROWSER_SEGMENTATION_LOCAL_MODEL_PATH = import.meta.env.VITE_BROWSER_SEGME
     '/models/';
 const BROWSER_SEGMENTATION_CACHE_KEY = import.meta.env.VITE_BROWSER_SEGMENTATION_CACHE_KEY ||
     'web-ar-browser-segmentation-v2';
+const BROWSER_SEGMENTATION_DTYPE = import.meta.env.VITE_BROWSER_SEGMENTATION_DTYPE || 'fp32';
 const BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS =
     String(import.meta.env.VITE_BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS || 'false').toLowerCase() === 'true';
 const BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH || 960);
@@ -133,7 +134,8 @@ export function getOnDeviceSegmentationStatus() {
         model: BROWSER_SEGMENTATION_MODEL,
         localModelPath: BROWSER_SEGMENTATION_LOCAL_MODEL_PATH,
         allowRemoteModels: BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS,
-        cacheKey: BROWSER_SEGMENTATION_CACHE_KEY
+        cacheKey: BROWSER_SEGMENTATION_CACHE_KEY,
+        dtype: BROWSER_SEGMENTATION_DTYPE
     };
 }
 
@@ -178,6 +180,7 @@ async function loadSegmenter(device) {
     const promise = loadTransformersModule()
         .then(({ pipeline }) => pipeline('image-segmentation', BROWSER_SEGMENTATION_MODEL, {
             device,
+            dtype: BROWSER_SEGMENTATION_DTYPE,
             local_files_only: !BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS
         }))
         .catch(error => {
