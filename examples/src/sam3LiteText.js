@@ -5,6 +5,8 @@ const BROWSER_SEGMENTATION_MODEL = import.meta.env.VITE_BROWSER_SEGMENTATION_MOD
 const BROWSER_SEGMENTATION_DEVICE = import.meta.env.VITE_BROWSER_SEGMENTATION_DEVICE || 'auto';
 const BROWSER_SEGMENTATION_LOCAL_MODEL_PATH = import.meta.env.VITE_BROWSER_SEGMENTATION_LOCAL_MODEL_PATH ||
     '/models/';
+const BROWSER_SEGMENTATION_CACHE_KEY = import.meta.env.VITE_BROWSER_SEGMENTATION_CACHE_KEY ||
+    'web-ar-browser-segmentation-v2';
 const BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS =
     String(import.meta.env.VITE_BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS || 'false').toLowerCase() === 'true';
 const BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH || 960);
@@ -130,7 +132,8 @@ export function getOnDeviceSegmentationStatus() {
         deviceLabel: displayDevice(device),
         model: BROWSER_SEGMENTATION_MODEL,
         localModelPath: BROWSER_SEGMENTATION_LOCAL_MODEL_PATH,
-        allowRemoteModels: BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS
+        allowRemoteModels: BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS,
+        cacheKey: BROWSER_SEGMENTATION_CACHE_KEY
     };
 }
 
@@ -156,6 +159,7 @@ async function loadTransformersModule() {
             module.env.allowLocalModels = true;
             module.env.allowRemoteModels = BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS;
             module.env.localModelPath = BROWSER_SEGMENTATION_LOCAL_MODEL_PATH;
+            module.env.cacheKey = BROWSER_SEGMENTATION_CACHE_KEY;
             return module;
         });
     }
