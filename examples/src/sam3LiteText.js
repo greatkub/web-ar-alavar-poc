@@ -3,6 +3,10 @@ import { compressImageToDataUrl } from './treeAnalysis.js';
 const BROWSER_SEGMENTATION_MODEL = import.meta.env.VITE_BROWSER_SEGMENTATION_MODEL ||
     'Xenova/segformer-b0-finetuned-ade-512-512';
 const BROWSER_SEGMENTATION_DEVICE = import.meta.env.VITE_BROWSER_SEGMENTATION_DEVICE || 'auto';
+const BROWSER_SEGMENTATION_LOCAL_MODEL_PATH = import.meta.env.VITE_BROWSER_SEGMENTATION_LOCAL_MODEL_PATH ||
+    '/models/';
+const BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS =
+    String(import.meta.env.VITE_BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS || 'false').toLowerCase() === 'true';
 const BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH || 960);
 const BROWSER_SEGMENTATION_IMAGE_QUALITY = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_JPEG_QUALITY || 0.82);
 const DEFAULT_THRESHOLD = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_THRESHOLD || 0.5);
@@ -124,7 +128,9 @@ export function getOnDeviceSegmentationStatus() {
         webgpu: hasWebGpu(),
         device,
         deviceLabel: displayDevice(device),
-        model: BROWSER_SEGMENTATION_MODEL
+        model: BROWSER_SEGMENTATION_MODEL,
+        localModelPath: BROWSER_SEGMENTATION_LOCAL_MODEL_PATH,
+        allowRemoteModels: BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS
     };
 }
 
@@ -147,7 +153,9 @@ function throwIfAborted(signal) {
 async function loadTransformersModule() {
     if (!transformersModulePromise) {
         transformersModulePromise = import('@huggingface/transformers').then(module => {
-            module.env.allowLocalModels = false;
+            module.env.allowLocalModels = true;
+            module.env.allowRemoteModels = BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS;
+            module.env.localModelPath = BROWSER_SEGMENTATION_LOCAL_MODEL_PATH;
             return module;
         });
     }
@@ -164,7 +172,10 @@ async function loadSegmenter(device) {
     }
 
     const promise = loadTransformersModule()
-        .then(({ pipeline }) => pipeline('image-segmentation', BROWSER_SEGMENTATION_MODEL, { device }))
+        .then(({ pipeline }) => pipeline('image-segmentation', BROWSER_SEGMENTATION_MODEL, {
+            device,
+            local_files_only: !BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS
+        }))
         .catch(error => {
             segmenterCache.delete(key);
             throw error;
