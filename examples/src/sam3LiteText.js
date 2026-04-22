@@ -86,22 +86,34 @@ function hasWebGpu() {
     return Boolean(globalThis.navigator?.gpu && globalThis.isSecureContext);
 }
 
+function configuredBrowserDevice() {
+    return String(BROWSER_SEGMENTATION_DEVICE || 'auto').toLowerCase();
+}
+
 function resolveBrowserDevice() {
-    const configuredDevice = String(BROWSER_SEGMENTATION_DEVICE || 'auto').toLowerCase();
+    const configuredDevice = configuredBrowserDevice();
 
     if (configuredDevice === 'auto' || configuredDevice === 'gpu') {
-        return hasWebGpu() ? 'webgpu' : 'cpu';
+        return hasWebGpu() ? 'webgpu' : 'wasm';
     }
 
-    if (configuredDevice === 'wasm') {
-        return 'cpu';
+    if (configuredDevice === 'webgpu') {
+        return 'webgpu';
     }
 
-    return configuredDevice;
+    if (configuredDevice === 'wasm' || configuredDevice === 'cpu') {
+        return 'wasm';
+    }
+
+    return hasWebGpu() ? 'webgpu' : 'wasm';
 }
 
 function displayDevice(device) {
-    return device === 'cpu' ? 'WASM' : device.toUpperCase();
+    return device === 'wasm' || device === 'cpu' ? 'WASM' : device.toUpperCase();
+}
+
+function isWebGpuForced() {
+    return configuredBrowserDevice() === 'webgpu';
 }
 
 export function getOnDeviceSegmentationStatus() {
@@ -648,12 +660,12 @@ export async function analyzeSam3LiteTextPhoto(file, {
     try {
         segmenter = await loadSegmenter(activeDevice);
     } catch (loadError) {
-        if (activeDevice !== 'webgpu' || BROWSER_SEGMENTATION_DEVICE === 'webgpu') {
+        if (activeDevice !== 'webgpu' || isWebGpuForced()) {
             throw loadError;
         }
 
         fallbackReason = loadError instanceof Error ? loadError.message : 'WebGPU model load failed.';
-        activeDevice = 'cpu';
+        activeDevice = 'wasm';
         segmenter = await loadSegmenter(activeDevice);
     }
 
@@ -667,12 +679,12 @@ export async function analyzeSam3LiteTextPhoto(file, {
             mask_threshold: normalizedMaskThreshold
         });
     } catch (runError) {
-        if (activeDevice !== 'webgpu' || BROWSER_SEGMENTATION_DEVICE === 'webgpu') {
+        if (activeDevice !== 'webgpu' || isWebGpuForced()) {
             throw runError;
         }
 
         fallbackReason = runError instanceof Error ? runError.message : 'WebGPU inference failed.';
-        activeDevice = 'cpu';
+        activeDevice = 'wasm';
         const wasmSegmenter = await loadSegmenter(activeDevice);
         pipelineOutput = await wasmSegmenter(image.dataUrl, {
             threshold: normalizedThreshold,
