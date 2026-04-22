@@ -5,6 +5,35 @@ import { createRealtimeTtsSession, prepareTtsAudio } from './tts/realtimeTts.js'
 import { isSupabaseConfigured, supabase } from './supabase.js';
 import { SignInScreen } from './SignInScreen.jsx';
 import { analyzeTreePhoto } from './treeAnalysis.js';
+import {
+    analyzeSam3LiteTextPhoto,
+    drawSam3LiteTextMasks,
+    getSam3LiteTextOverlayUrl,
+    summarizeSam3LiteTextOutput
+} from './sam3LiteText.js';
+
+const SAM3_ROUTE = 'sam3-litetext';
+
+function currentBrowserRoute() {
+    const cleanPath = window.location.pathname.replace(/\/+$/, '');
+
+    if (cleanPath.endsWith(`/${SAM3_ROUTE}`)) {
+        return SAM3_ROUTE;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get('mode');
+
+    if (mode === 'ar') {
+        return 'ar';
+    }
+
+    if (mode === SAM3_ROUTE) {
+        return SAM3_ROUTE;
+    }
+
+    return params.get('route') || '';
+}
 
 function ScreenTransition({ direction, screenKey, suppressAnimation, children }) {
     const suppress = suppressAnimation ? ' screen-transition--suppress' : '';
@@ -89,7 +118,28 @@ function useAuth() {
 
 function App() {
     const session = useAuth();
-    const isLiveAr = useMemo(() => new URLSearchParams(window.location.search).get('mode') === 'ar', []);
+    const [browserRoute, setBrowserRoute] = useState(currentBrowserRoute);
+
+    useEffect(() => {
+        const handlePopState = () => setBrowserRoute(currentBrowserRoute());
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, []);
+
+    const openBrowserRoute = useCallback((route) => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('mode');
+
+        if (route) {
+            url.searchParams.set('route', route);
+        } else {
+            url.searchParams.delete('route');
+            url.pathname = url.pathname.replace(new RegExp(`/${SAM3_ROUTE}/?$`), '') || '/';
+        }
+
+        window.history.pushState({}, '', url);
+        setBrowserRoute(currentBrowserRoute());
+    }, []);
 
     if (session === undefined) {
         return (
@@ -103,11 +153,15 @@ function App() {
         return <SignInScreen />;
     }
 
-    if (isLiveAr) {
+    if (browserRoute === 'ar') {
         return <LiveCameraDemo />;
     }
 
-    return <GreenCreditPrototype session={session} />;
+    if (browserRoute === SAM3_ROUTE) {
+        return <Sam3LiteTextScreen onBack={() => openBrowserRoute('')} />;
+    }
+
+    return <GreenCreditPrototype session={session} onOpenSam3LiteText={() => openBrowserRoute(SAM3_ROUTE)} />;
 }
 
 function LiveCameraDemo() {
@@ -142,7 +196,7 @@ function LiveCameraDemo() {
     );
 }
 
-function GreenCreditPrototype({ session }) {
+function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
     const handleSignOut = useCallback(async () => {
         if (!isSupabaseConfigured) {
             return;
@@ -214,6 +268,7 @@ function GreenCreditPrototype({ session }) {
                 onOpenStore={() => navigate('store', 'forward')}
                 onOpenInfo={(screen) => navigate(screen, 'forward')}
                 onOpenTreeAnalysis={() => navigate('treeAnalysis', 'forward')}
+                onOpenSam3LiteText={onOpenSam3LiteText}
                 onOpenCapture={() => {
                     setCaptureReturnScreen('home');
                     navigate('capture', 'forward');
@@ -236,7 +291,7 @@ function GreenCreditPrototype({ session }) {
     );
 }
 
-function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenCapture, userEmail, onSignOut, canSignOut }) {
+function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenSam3LiteText, onOpenCapture, userEmail, onSignOut, canSignOut }) {
     return (
         <main className="prototype-shell home-screen">
             <section className="home-content">
@@ -248,6 +303,7 @@ function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis,
                 </div>
                 <nav className="home-links" aria-label="More information">
                     <button type="button" onClick={onOpenTreeAnalysis}>Tree image analysis</button>
+                    <button type="button" onClick={onOpenSam3LiteText}>SAM3-LiteText test</button>
                     <button type="button" onClick={() => onOpenInfo('about')}>About the app</button>
                     <button type="button" onClick={() => onOpenInfo('makers')}>Meet the makers</button>
                     <button type="button" onClick={onOpenCapture}>
@@ -521,6 +577,282 @@ function TreeAnalysisResult({ result }) {
                 ))}
             </div>
         </section>
+    );
+}
+
+function Sam3LiteTextScreen({ onBack }) {
+    const cameraInputRef = useRef(null);
+    const galleryInputRef = useRef(null);
+    const controllerRef = useRef(null);
+    const [prompt, setPrompt] = useState('tree or plant');
+    const [threshold, setThreshold] = useState(0.5);
+    const [maskThreshold, setMaskThreshold] = useState(0.5);
+    const [previewUrl, setPreviewUrl] = useState('');
+    const [result, setResult] = useState(null);
+    const [imageMeta, setImageMeta] = useState(null);
+    const [lastFile, setLastFile] = useState(null);
+    const [status, setStatus] = useState('idle');
+    const [error, setError] = useState('');
+
+    useEffect(() => () => {
+        controllerRef.current?.abort();
+    }, []);
+
+    useEffect(() => () => {
+        if (previewUrl) {
+            URL.revokeObjectURL(previewUrl);
+        }
+    }, [previewUrl]);
+
+    const setSelectedFile = useCallback((file) => {
+        if (!file) {
+            return;
+        }
+
+        if (!file.type.startsWith('image/')) {
+            setError('Choose an image file to segment.');
+            setStatus('error');
+            return;
+        }
+
+        setPreviewUrl(previousUrl => {
+            if (previousUrl) {
+                URL.revokeObjectURL(previousUrl);
+            }
+
+            return URL.createObjectURL(file);
+        });
+        setLastFile(file);
+        setResult(null);
+        setImageMeta(null);
+        setError('');
+        setStatus('ready');
+    }, []);
+
+    const runSegmentation = useCallback(async () => {
+        if (!lastFile) {
+            setError('Choose an image first.');
+            setStatus('error');
+            return;
+        }
+
+        controllerRef.current?.abort();
+        const controller = new AbortController();
+        controllerRef.current = controller;
+
+        setResult(null);
+        setImageMeta(null);
+        setError('');
+        setStatus('loading');
+
+        try {
+            const analysis = await analyzeSam3LiteTextPhoto(lastFile, {
+                text: prompt,
+                threshold,
+                maskThreshold,
+                signal: controller.signal
+            });
+            setResult(analysis.result);
+            setImageMeta({
+                ...analysis.image,
+                endpoint: analysis.endpoint,
+                model: analysis.model
+            });
+            setStatus('done');
+        } catch (segmentationError) {
+            if (segmentationError?.name === 'AbortError') {
+                return;
+            }
+
+            setError(segmentationError instanceof Error ? segmentationError.message : 'SAM3-LiteText request failed.');
+            setStatus('error');
+        } finally {
+            if (controllerRef.current === controller) {
+                controllerRef.current = null;
+            }
+        }
+    }, [lastFile, maskThreshold, prompt, threshold]);
+
+    const handleFileChange = (event) => {
+        const [file] = event.target.files || [];
+        event.target.value = '';
+        setSelectedFile(file);
+    };
+
+    const loading = status === 'loading';
+    const summary = result ? summarizeSam3LiteTextOutput(result) : null;
+    const canRun = Boolean(lastFile && prompt.trim() && !loading);
+
+    return (
+        <main className="prototype-shell sam3-screen">
+            <BackButton onClick={onBack} />
+            <section className="sam3-header">
+                <span className="plant-pill">
+                    <span className="leaf-icon"></span>
+                    SAM3-LiteText
+                </span>
+                <h1>Prompt segmentation</h1>
+            </section>
+            <section className="sam3-workbench">
+                <Sam3LiteTextPreview previewUrl={previewUrl} result={result} loading={loading} />
+                <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="tree-file-input"
+                    onChange={handleFileChange}
+                />
+                <input
+                    ref={galleryInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="tree-file-input"
+                    onChange={handleFileChange}
+                />
+                <div className="tree-capture-actions sam3-source-actions">
+                    <button type="button" className="tree-action-button tree-action-button--primary" onClick={() => cameraInputRef.current?.click()} disabled={loading}>
+                        <span className="tree-action-icon tree-action-icon--camera" aria-hidden="true"></span>
+                        Open camera
+                    </button>
+                    <button type="button" className="tree-action-button" onClick={() => galleryInputRef.current?.click()} disabled={loading}>
+                        <span className="tree-action-icon tree-action-icon--gallery" aria-hidden="true"></span>
+                        Select photo
+                    </button>
+                </div>
+                <label className="sam3-field">
+                    <span>Prompt</span>
+                    <input
+                        value={prompt}
+                        onChange={(event) => setPrompt(event.target.value)}
+                        placeholder="tree or plant"
+                        disabled={loading}
+                    />
+                </label>
+                <div className="sam3-slider-grid">
+                    <label className="sam3-slider">
+                        <span>Score {threshold.toFixed(2)}</span>
+                        <input
+                            type="range"
+                            min="0.05"
+                            max="0.95"
+                            step="0.05"
+                            value={threshold}
+                            onChange={(event) => setThreshold(Number(event.target.value))}
+                            disabled={loading}
+                        />
+                    </label>
+                    <label className="sam3-slider">
+                        <span>Mask {maskThreshold.toFixed(2)}</span>
+                        <input
+                            type="range"
+                            min="0.05"
+                            max="0.95"
+                            step="0.05"
+                            value={maskThreshold}
+                            onChange={(event) => setMaskThreshold(Number(event.target.value))}
+                            disabled={loading}
+                        />
+                    </label>
+                </div>
+                <button type="button" className="sam3-run-button" onClick={runSegmentation} disabled={!canRun}>
+                    <span className="sam3-run-icon" aria-hidden="true"></span>
+                    Run segmentation
+                </button>
+                {imageMeta && (
+                    <p className="tree-image-meta">
+                        Sent {imageMeta.width}x{imageMeta.height} JPEG, {formatBytes(imageMeta.compressedBytes)}
+                    </p>
+                )}
+            </section>
+            {error && (
+                <section className="tree-error" role="alert">
+                    <strong>Segmentation failed</strong>
+                    <p>{error}</p>
+                </section>
+            )}
+            {summary && <Sam3LiteTextSummary summary={summary} />}
+            {result && <Sam3LiteTextRawOutput result={result} />}
+        </main>
+    );
+}
+
+function Sam3LiteTextPreview({ previewUrl, result, loading }) {
+    const canvasRef = useRef(null);
+    const [maskMessage, setMaskMessage] = useState('');
+    const overlayUrl = useMemo(() => getSam3LiteTextOverlayUrl(result), [result]);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+
+        if (!canvas) {
+            return;
+        }
+
+        const context = canvas.getContext('2d');
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        setMaskMessage('');
+
+        if (!result || overlayUrl) {
+            return;
+        }
+
+        const drawResult = drawSam3LiteTextMasks(canvas, result);
+
+        if (!drawResult.drawn) {
+            setMaskMessage('No drawable mask returned.');
+        }
+    }, [overlayUrl, result]);
+
+    return (
+        <div className={`sam3-preview${previewUrl ? ' has-image' : ''}`}>
+            {previewUrl ? (
+                <img src={previewUrl} alt="Selected image preview" />
+            ) : (
+                <span className="tree-photo-placeholder" aria-hidden="true"></span>
+            )}
+            {overlayUrl && <img className="sam3-overlay-image" src={overlayUrl} alt="" aria-hidden="true" />}
+            {!overlayUrl && <canvas ref={canvasRef} className="sam3-mask-canvas" aria-hidden="true"></canvas>}
+            {maskMessage && <span className="sam3-mask-message">{maskMessage}</span>}
+            {loading && (
+                <div className="tree-loading" role="status" aria-live="polite">
+                    <span className="tree-loading-spinner"></span>
+                    <strong>Segmenting...</strong>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function Sam3LiteTextSummary({ summary }) {
+    return (
+        <section className="sam3-summary" aria-live="polite">
+            <div className="tree-result-field">
+                <span>Prompt match</span>
+                <strong>{summary.objectCount > 0 ? `${summary.objectCount} segment${summary.objectCount === 1 ? '' : 's'}` : 'No segments'}</strong>
+            </div>
+            <div className="tree-result-field">
+                <span>Best score</span>
+                <strong>{formatModelScore(summary.bestScore)}</strong>
+            </div>
+            <div className="tree-result-field">
+                <span>Presence</span>
+                <strong>{formatModelScore(summary.presenceScore)}</strong>
+            </div>
+            <div className="tree-result-field">
+                <span>Drawable masks</span>
+                <strong>{summary.drawableMaskCount}</strong>
+            </div>
+        </section>
+    );
+}
+
+function Sam3LiteTextRawOutput({ result }) {
+    return (
+        <details className="sam3-raw-output" open>
+            <summary>Original model output JSON</summary>
+            <pre>{JSON.stringify(result, null, 2)}</pre>
+        </details>
     );
 }
 
@@ -861,6 +1193,20 @@ function formatCurrency(value) {
     }
 
     return `$${amount.toFixed(2)}`;
+}
+
+function formatModelScore(value) {
+    const score = Number(value);
+
+    if (!Number.isFinite(score)) {
+        return 'Unavailable';
+    }
+
+    if (score >= 0 && score <= 1) {
+        return `${Math.round(score * 100)}%`;
+    }
+
+    return score.toFixed(3);
 }
 
 function MicButton({ onClick, warning = false, listening = false, disabled = false }) {

@@ -956,6 +956,215 @@ button {
     }
 }
 
+.sam3-screen {
+    padding: 76px 20px 28px;
+    overflow-y: auto;
+    background: #f7f1df;
+}
+
+.sam3-header {
+    display: grid;
+    gap: 12px;
+}
+
+.sam3-header h1 {
+    font-size: 36px;
+    font-weight: 500;
+    line-height: 1.02;
+}
+
+.sam3-workbench {
+    margin-top: 20px;
+}
+
+.sam3-preview {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: 8px;
+    background:
+        linear-gradient(180deg, rgba(10, 15, 18, 0.14), rgba(10, 15, 18, 0.58)),
+        linear-gradient(135deg, rgba(18, 88, 98, 0.55) 0 20%, transparent 20%),
+        linear-gradient(250deg, rgba(135, 77, 44, 0.5) 0 18%, transparent 18%),
+        #263338;
+}
+
+.sam3-preview>img:not(.sam3-overlay-image) {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.sam3-overlay-image,
+.sam3-mask-canvas {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+}
+
+.sam3-mask-canvas {
+    image-rendering: auto;
+}
+
+.sam3-mask-message {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 3;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(17, 19, 15, 0.78);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.2;
+    text-align: center;
+}
+
+.sam3-source-actions {
+    margin-top: 12px;
+}
+
+.sam3-field {
+    display: grid;
+    gap: 7px;
+    margin-top: 14px;
+}
+
+.sam3-field span,
+.sam3-slider span {
+    color: #666255;
+    font-size: 11px;
+    letter-spacing: 1.2px;
+    line-height: 1.1;
+    text-transform: uppercase;
+}
+
+.sam3-field input {
+    width: 100%;
+    min-height: 48px;
+    padding: 0 14px;
+    border: 1.5px solid rgba(15, 92, 63, 0.24);
+    border-radius: 8px;
+    background: #fffaf0;
+    color: var(--ink);
+    font: inherit;
+    font-size: 17px;
+    line-height: 1.2;
+}
+
+.sam3-field input:focus {
+    border-color: var(--green-deep);
+    outline: none;
+}
+
+.sam3-slider-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.sam3-slider {
+    display: grid;
+    gap: 8px;
+    min-height: 74px;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--cream-deep);
+}
+
+.sam3-slider input {
+    width: 100%;
+    accent-color: var(--green-deep);
+}
+
+.sam3-run-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 54px;
+    margin-top: 12px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 8px;
+    background: #11130f;
+    color: #fff;
+    cursor: pointer;
+    font-size: 17px;
+    line-height: 1.1;
+}
+
+.sam3-run-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.sam3-run-icon {
+    position: relative;
+    flex: 0 0 auto;
+    width: 21px;
+    height: 21px;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+}
+
+.sam3-run-icon::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    transform: translate(-50%, -50%);
+}
+
+.sam3-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.sam3-raw-output {
+    margin-top: 18px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
+.sam3-raw-output summary {
+    min-height: 44px;
+    cursor: pointer;
+    color: var(--ink);
+    font-size: 17px;
+    line-height: 1.2;
+}
+
+.sam3-raw-output pre {
+    max-height: 360px;
+    margin: 0;
+    padding: 14px;
+    overflow: auto;
+    border-radius: 8px;
+    background: #151913;
+    color: #eaf2de;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .chat-screen {
     display: flex;
     flex-direction: column;
