@@ -685,6 +685,13 @@ function Sam3LiteTextScreen({ onBack }) {
     const loading = status === 'loading';
     const summary = result ? summarizeSam3LiteTextOutput(result) : null;
     const canRun = Boolean(lastFile && prompt.trim() && !loading);
+    const runtimeDetails = runtimeInfo.device === 'webgpu'
+        ? 'WebGPU selected'
+        : runtimeInfo.webgpuAutoEnabled
+            ? 'WASM selected'
+            : runtimeInfo.webgpu
+                ? 'WebGPU detected, using WASM'
+                : 'WASM fallback';
 
     return (
         <main className="prototype-shell sam3-screen">
@@ -763,7 +770,7 @@ function Sam3LiteTextScreen({ onBack }) {
                     Run on device
                 </button>
                 <p className="tree-image-meta">
-                    Runtime {runtimeInfo.deviceLabel}, {runtimeInfo.webgpu ? 'WebGPU available' : 'WASM fallback'}
+                    Runtime {runtimeInfo.deviceLabel}, {runtimeDetails}
                 </p>
                 {imageMeta && (
                     <p className="tree-image-meta">

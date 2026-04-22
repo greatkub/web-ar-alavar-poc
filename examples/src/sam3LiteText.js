@@ -93,6 +93,24 @@ function hasWebGpu() {
     return Boolean(globalThis.navigator?.gpu && globalThis.isSecureContext);
 }
 
+function isIosBrowser() {
+    const navigatorInfo = globalThis.navigator;
+
+    if (!navigatorInfo) {
+        return false;
+    }
+
+    const userAgent = navigatorInfo.userAgent || '';
+    const platform = navigatorInfo.platform || '';
+    const maxTouchPoints = Number(navigatorInfo.maxTouchPoints || 0);
+
+    return /iPad|iPhone|iPod/.test(userAgent) || (platform === 'MacIntel' && maxTouchPoints > 1);
+}
+
+function canAutoUseWebGpu() {
+    return hasWebGpu() && !isIosBrowser();
+}
+
 function configuredBrowserDevice() {
     return String(BROWSER_SEGMENTATION_DEVICE || 'auto').toLowerCase();
 }
@@ -101,7 +119,7 @@ function resolveBrowserDevice() {
     const configuredDevice = configuredBrowserDevice();
 
     if (configuredDevice === 'auto' || configuredDevice === 'gpu') {
-        return hasWebGpu() ? 'webgpu' : 'wasm';
+        return canAutoUseWebGpu() ? 'webgpu' : 'wasm';
     }
 
     if (configuredDevice === 'webgpu') {
@@ -112,7 +130,7 @@ function resolveBrowserDevice() {
         return 'wasm';
     }
 
-    return hasWebGpu() ? 'webgpu' : 'wasm';
+    return canAutoUseWebGpu() ? 'webgpu' : 'wasm';
 }
 
 function displayDevice(device) {
@@ -129,6 +147,8 @@ export function getOnDeviceSegmentationStatus() {
     return {
         mode: 'browser',
         webgpu: hasWebGpu(),
+        webgpuAutoEnabled: canAutoUseWebGpu(),
+        iosBrowser: isIosBrowser(),
         device,
         deviceLabel: displayDevice(device),
         model: BROWSER_SEGMENTATION_MODEL,
