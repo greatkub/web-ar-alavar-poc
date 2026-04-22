@@ -129,6 +129,8 @@ Don’t do this unless the site is one you trust or develop.
 
 2026-04-22: Moved the browser segmentation model files into the app so Transformers.js loads SegFormer from `/models/Xenova/segformer-b0-finetuned-ade-512-512` instead of probing `huggingface.co`. Configuration impact: the default route sets local model loading on, disables remote model loading, and adds optional `VITE_BROWSER_SEGMENTATION_LOCAL_MODEL_PATH` plus `VITE_BROWSER_SEGMENTATION_ALLOW_REMOTE_MODELS` for overrides. Verification: run `cd ./examples && npm run build`, serve the app over HTTPS, open `/?route=sam3-litetext`, tap `Run on device`, and confirm the browser Network tab shows model files loading from the app origin rather than Hugging Face.
 
+2026-04-22: Fixed local model asset fallback for the browser segmentation route. Configuration impact: Vite dev/preview and the Express HTTPS server now return `404 Not found` for missing `/models/*` files instead of serving the React `index.html`, which lets Transformers.js ignore optional metadata such as tokenizer files cleanly. Verification: run `cd ./examples && npm run build`, start the HTTPS app, request `/models/Xenova/segformer-b0-finetuned-ade-512-512/tokenizer_config.json`, and confirm it returns 404 rather than HTML; then rerun `/?route=sam3-litetext`.
+
 
 ## Usage
 

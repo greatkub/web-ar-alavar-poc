@@ -43,6 +43,11 @@ app.use( ( req, response, next ) =>
 
 app.use( express.static( STATIC_ROOT ) );
 
+app.use( '/models', ( req, response ) =>
+{
+    response.status( 404 ).type( 'text/plain' ).send( 'Not found' );
+} );
+
 if( fs.existsSync( path.join( STATIC_ROOT, 'index.html' ) ) )
 {
     app.get( '*', ( req, response ) =>
