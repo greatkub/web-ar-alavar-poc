@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRealtimeAsrSession } from './asr/realtimeAsr.js';
 import { useMicrophone } from './microphone/index.js';
-import { createRealtimeTtsSession, prepareTtsAudio } from './tts/realtimeTts.js';
+import { createVoiceReplySession, prepareVoiceReplyAudio } from './voiceReply.js';
 import { isSupabaseConfigured, supabase } from './supabase.js';
 import { SignInScreen } from './SignInScreen.jsx';
 import { analyzeTreePhoto, fetchPlantAvatarPrompt } from './treeAnalysis.js';
@@ -1141,7 +1141,7 @@ function ChatTranscript() {
         setTtsError('');
         setTtsStatus('connecting');
 
-        const session = createRealtimeTtsSession({
+        const session = createVoiceReplySession({
             text: transcript,
             onStatus: setTtsStatus,
             onError: (message) => {
@@ -1220,7 +1220,7 @@ function ChatTranscript() {
             setTtsError('');
             setLiveCaption('');
             try {
-                await prepareTtsAudio();
+                await prepareVoiceReplyAudio();
                 await startListening();
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Microphone permission failed.';
