@@ -1477,7 +1477,12 @@ function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false, ana
             </section>
             <section className={panelClassName}>
                 {chatState === 'intro' && <ChatIntro onTalk={() => setChatState('speaking')} analysisResult={analysisResult} />}
-                {chatState === 'speaking' && <ChatTranscript />}
+                {chatState === 'speaking' && (
+                    <ChatTranscript
+                        analysisResult={analysisResult}
+                        avatarPrompt={avatarPrompt}
+                    />
+                )}
             </section>
         </main>
     );
@@ -1507,7 +1512,7 @@ function ChatIntro({ onTalk, analysisResult }) {
     );
 }
 
-function ChatTranscript() {
+function ChatTranscript({ analysisResult, avatarPrompt }) {
     const [lines, setLines] = useState([]);
     const [liveCaption, setLiveCaption] = useState('');
     const [asrStatus, setAsrStatus] = useState('idle');
@@ -1559,7 +1564,7 @@ function ChatTranscript() {
                 setTtsStatus('error');
                 ttsSessionRef.current = null;
             });
-    }, [stopTtsSession]);
+    }, [analysisResult, avatarPrompt, stopTtsSession]);
 
     const handleStream = useCallback((stream) => {
         stopAsrSession();

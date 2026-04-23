@@ -4,6 +4,8 @@ const REPLY_VOICE_URL = (
 ).trim();
 
 const REPLY_BEARER_TOKEN = (
+    import.meta.env.VITE_REPLY_CLIENT_TOKEN ||
+    import.meta.env.VITE_TTS_CLIENT_TOKEN ||
     import.meta.env.VITE_ASR_CLIENT_TOKEN ||
     ''
 ).trim();
