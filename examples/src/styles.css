@@ -1376,6 +1376,46 @@ button {
     background: #24321d;
 }
 
+.chat-hero--ar {
+    background: #0d1a0e;
+}
+
+.chat-hero--ar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.24));
+}
+
+.chat-ar-bg,
+.chat-ar-video,
+.chat-ar-sprite {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.chat-ar-bg {
+    z-index: 0;
+    overflow: hidden;
+    background:
+        linear-gradient(180deg, rgba(8, 18, 12, 0.18), rgba(14, 28, 17, 0.42)),
+        #0d1a0e;
+}
+
+.chat-ar-video {
+    object-fit: cover;
+    filter: saturate(0.92) brightness(0.82);
+}
+
+.chat-ar-sprite {
+    z-index: 1;
+    pointer-events: none;
+}
+
 .chat-photo {
     position: absolute;
     inset: 0;
@@ -1522,6 +1562,86 @@ button {
     right: max(24px, calc(env(safe-area-inset-right) + 24px));
     bottom: max(54px, calc(env(safe-area-inset-bottom) + var(--ar-browser-ui-bottom, 0px) + 54px));
     z-index: 6;
+}
+
+.ar-voice-controls {
+    position: fixed;
+    z-index: 6;
+    left: max(12px, env(safe-area-inset-left));
+    bottom: max(92px, calc(env(safe-area-inset-bottom) + var(--ar-browser-ui-bottom, 0px) + 86px));
+    display: flex;
+    align-items: center;
+    max-width: min(320px, calc(100vw - 120px));
+    gap: 10px;
+    color: #ffffff;
+    font: 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ar-voice-button {
+    position: relative;
+    width: 54px;
+    height: 54px;
+    flex: 0 0 54px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    border-radius: 50%;
+    background: rgba(8, 12, 16, 0.72);
+    cursor: pointer;
+    touch-action: manipulation;
+    backdrop-filter: blur(10px);
+}
+
+.ar-voice-button::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 12px;
+    width: 13px;
+    height: 22px;
+    border-radius: 8px;
+    background: #ffffff;
+    transform: translateX(-50%);
+}
+
+.ar-voice-button::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    width: 24px;
+    height: 14px;
+    border: 3px solid #ffffff;
+    border-top: 0;
+    border-radius: 0 0 14px 14px;
+    transform: translateX(-50%);
+}
+
+.ar-voice-controls.is-listening .ar-voice-button,
+.ar-voice-controls.is-speaking .ar-voice-button {
+    border-color: rgba(143, 255, 194, 0.82);
+    background: rgba(18, 86, 67, 0.74);
+}
+
+.ar-voice-controls.has-error .ar-voice-button {
+    border-color: rgba(255, 152, 152, 0.82);
+}
+
+.ar-voice-button:disabled {
+    cursor: default;
+    opacity: 0.72;
+}
+
+.ar-voice-status {
+    min-width: 0;
+    max-width: 100%;
+    padding: 8px 10px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    background: rgba(8, 12, 16, 0.68);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    backdrop-filter: blur(10px);
 }
 
 .care-action {

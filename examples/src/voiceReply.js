@@ -71,7 +71,7 @@ async function playPcm16(buffer) {
     });
 }
 
-export function createVoiceReplySession({ text, onStatus, onError }) {
+export function createVoiceReplySession({ text, responseInstructions, onStatus, onError }) {
     let abortController = null;
     let stopped = false;
 
@@ -104,6 +104,10 @@ export function createVoiceReplySession({ text, onStatus, onError }) {
             language: import.meta.env.VITE_REPLY_LANGUAGE || 'en',
             audio_format: 'pcm'
         };
+
+        if (responseInstructions) {
+            body.response_instructions = responseInstructions;
+        }
 
         let response;
 

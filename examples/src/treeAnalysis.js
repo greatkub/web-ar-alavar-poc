@@ -4,6 +4,8 @@ const TREE_ANALYSIS_URL = import.meta.env.VITE_TREE_ANALYSIS_URL ||
     `${API_BASE_URL}/tree/analyze`;
 const PLANT_AVATAR_PROMPT_URL = import.meta.env.VITE_PLANT_AVATAR_PROMPT_URL ||
     `${API_BASE_URL}/plant/avatar/prompt`;
+const PLANT_COMPANION_JOBS_URL = import.meta.env.VITE_PLANT_COMPANION_JOBS_URL ||
+    `${API_BASE_URL}/plant/avatar/companion/jobs`;
 const TREE_ANALYSIS_MODEL = import.meta.env.VITE_TREE_ANALYSIS_MODEL || 'qwen3.6-flash';
 const TREE_ANALYSIS_CLIENT_TOKEN = (
     import.meta.env.VITE_TREE_ANALYSIS_CLIENT_TOKEN ||
@@ -133,15 +135,59 @@ function errorDetail(body) {
     return '';
 }
 
-export async function analyzeTreePhoto(file, { signal } = {}) {
-    const image = await compressImageToDataUrl(file);
-    const headers = {
-        'Content-Type': 'application/json'
+function resolveApiUrl(url, baseUrl = API_BASE_URL) {
+    if (!url) {
+        return url;
+    }
+
+    try {
+        return new URL(url, baseUrl).href;
+    } catch {
+        return url;
+    }
+}
+
+function normalizeSpriteSheets(spriteSheets) {
+    if (!spriteSheets || typeof spriteSheets !== 'object') {
+        return spriteSheets;
+    }
+
+    return Object.fromEntries(
+        Object.entries(spriteSheets).map(([state, sprite]) => [
+            state,
+            {
+                ...sprite,
+                url: resolveApiUrl(sprite.url, PLANT_COMPANION_JOBS_URL)
+            }
+        ])
+    );
+}
+
+function normalizeCompanionJob(job) {
+    return {
+        ...job,
+        avatar_image_url: resolveApiUrl(job.avatar_image_url, PLANT_COMPANION_JOBS_URL),
+        sprite_sheets: normalizeSpriteSheets(job.sprite_sheets)
     };
+}
+
+function authHeaders(contentType = 'application/json') {
+    const headers = {};
+
+    if (contentType) {
+        headers['Content-Type'] = contentType;
+    }
 
     if (TREE_ANALYSIS_CLIENT_TOKEN) {
         headers.Authorization = `Bearer ${TREE_ANALYSIS_CLIENT_TOKEN}`;
     }
+
+    return headers;
+}
+
+export async function analyzeTreePhoto(file, { signal } = {}) {
+    const image = await compressImageToDataUrl(file);
+    const headers = authHeaders();
 
     const response = await fetch(TREE_ANALYSIS_URL, {
         method: 'POST',
@@ -177,13 +223,7 @@ export async function fetchPlantAvatarPrompt(treeResult, { language = 'en', sign
     const plantName = treeResult.tree_name || treeResult.tree_species || 'Unknown plant';
     const carbonKgPerYear = Number(treeResult.carbon_credit_estimate) || 0;
 
-    const headers = {
-        'Content-Type': 'application/json'
-    };
-
-    if (TREE_ANALYSIS_CLIENT_TOKEN) {
-        headers.Authorization = `Bearer ${TREE_ANALYSIS_CLIENT_TOKEN}`;
-    }
+    const headers = authHeaders();
 
     const response = await fetch(PLANT_AVATAR_PROMPT_URL, {
         method: 'POST',
@@ -203,4 +243,50 @@ export async function fetchPlantAvatarPrompt(treeResult, { language = 'en', sign
     }
 
     return response.json();
+}
+
+export async function createPlantCompanionJob(file, { language = 'en', signal } = {}) {
+    const image = await compressImageToDataUrl(file);
+    const response = await fetch(PLANT_COMPANION_JOBS_URL, {
+        method: 'POST',
+        headers: authHeaders(),
+        signal,
+        body: JSON.stringify({
+            image: image.dataUrl,
+            language,
+            response_model: TREE_ANALYSIS_MODEL,
+            region: 'international',
+            enable_thinking: TREE_ANALYSIS_ENABLE_THINKING,
+            sprite_video_duration_seconds: 2,
+            sprite_frame_count: 60
+        })
+    });
+
+    if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        const detail = errorDetail(body);
+
+        if (response.status === 401 && !TREE_ANALYSIS_CLIENT_TOKEN) {
+            throw new Error('Companion generation requires a backend auth token. Set VITE_TREE_ANALYSIS_CLIENT_TOKEN and try again.');
+        }
+
+        throw new Error(detail || `Companion generation failed with status ${response.status}.`);
+    }
+
+    return normalizeCompanionJob(await response.json());
+}
+
+export async function fetchPlantCompanionJob(jobId, { signal } = {}) {
+    const response = await fetch(`${PLANT_COMPANION_JOBS_URL}/${encodeURIComponent(jobId)}`, {
+        headers: authHeaders(null),
+        signal
+    });
+
+    if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        const detail = errorDetail(body);
+        throw new Error(detail || `Companion job fetch failed with status ${response.status}.`);
+    }
+
+    return normalizeCompanionJob(await response.json());
 }

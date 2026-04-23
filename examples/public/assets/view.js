@@ -3,13 +3,14 @@ import { OrbitControls } from 'https://threejsfundamentals.org/threejs/resources
 import { AlvaARConnectorTHREE } from './alva_ar_three.js'
 
 const AR_CHARACTER_SPRITE_EVENT = 'archaractersprite';
+const AR_CHARACTER_SPRITE_SET_EVENT = 'archaracterspriteset';
 const AR_CHARACTER_DEFAULT_CROP = {
     x: 0.16,
     y: 0,
     width: 0.72,
     height: 0.94
 };
-const AR_CHARACTER_SPRITES = {
+const AR_CHARACTER_DEFAULT_SPRITES = {
     idle: {
         url: './ar-character-idle.png?v=20260423-alpha',
         columns: 4,
@@ -47,6 +48,36 @@ const AR_CHARACTER_SPRITES = {
         crop: AR_CHARACTER_DEFAULT_CROP
     }
 };
+const AR_CHARACTER_SPRITES = {};
+
+function normalizeSpriteConfig( sprite, fallback )
+{
+    if( !sprite || !sprite.url )
+    {
+        return { ...fallback, crop: { ...fallback.crop } };
+    }
+
+    return {
+        ...fallback,
+        ...sprite,
+        columns: Number( sprite.columns ) || fallback.columns,
+        rows: Number( sprite.rows ) || fallback.rows,
+        frameCount: Number( sprite.frameCount || sprite.frame_count ) || fallback.frameCount,
+        fps: Number( sprite.fps ) || fallback.fps,
+        loop: typeof sprite.loop === 'boolean' ? sprite.loop : fallback.loop,
+        crop: { ...AR_CHARACTER_DEFAULT_CROP, ...( sprite.crop || {} ) }
+    };
+}
+
+function applyRuntimeSprites( sprites = null )
+{
+    for( const [ state, fallback ] of Object.entries( AR_CHARACTER_DEFAULT_SPRITES ) )
+    {
+        AR_CHARACTER_SPRITES[state] = normalizeSpriteConfig( sprites?.[state], fallback );
+    }
+}
+
+applyRuntimeSprites( window.__AR_COMPANION_SPRITES__ || null );
 
 class ARCamView
 {
@@ -85,6 +116,13 @@ class ARCamView
             const state = event.detail?.state || event.detail?.action;
             this.setSpriteState( state );
         };
+        this.handleSpriteSetEvent = event =>
+        {
+            applyRuntimeSprites( event.detail?.sprites || null );
+            this.spriteTextureCache.clear();
+            this.sprite = this.createSpriteState( this.spriteState );
+            this.loadSpriteTexture();
+        };
 
         this.renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
         this.renderer.setClearColor( 0, 0 );
@@ -120,6 +158,7 @@ class ARCamView
 
         container.appendChild( this.renderer.domElement );
         window.addEventListener( AR_CHARACTER_SPRITE_EVENT, this.handleSpriteStateEvent );
+        window.addEventListener( AR_CHARACTER_SPRITE_SET_EVENT, this.handleSpriteSetEvent );
 
         const render = () =>
         {

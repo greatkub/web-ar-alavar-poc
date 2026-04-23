@@ -4,8 +4,12 @@ import { useMicrophone } from './microphone/index.js';
 import { createVoiceReplySession, prepareVoiceReplyAudio } from './voiceReply.js';
 import { isSupabaseConfigured, supabase } from './supabase.js';
 import { SignInScreen } from './SignInScreen.jsx';
-import { analyzeTreePhoto, fetchPlantAvatarPrompt } from './treeAnalysis.js';
-import { initializeCameraDemo } from './cameraDemo.js';
+import {
+    analyzeTreePhoto,
+    createPlantCompanionJob,
+    fetchPlantAvatarPrompt,
+    fetchPlantCompanionJob
+} from './treeAnalysis.js';
 import { Stats } from '../public/assets/stats.js';
 import {
     analyzeSam3LiteTextPhoto,
@@ -17,21 +21,107 @@ import {
 
 const SAM3_ROUTE = 'sam3-litetext';
 const AR_CHARACTER_SPRITE_EVENT = 'archaractersprite';
+const AR_CHARACTER_SPRITE_SET_EVENT = 'archaracterspriteset';
+const AR_COMPANION_STORAGE_KEY = 'greencredit-ar-companion';
 const CAPTURE_IMAGE_MAX_WIDTH = 1280;
-const CAPTURE_BUSY_STATUSES = new Set(['validating', 'analyzing', 'fetching']);
-const CAPTURE_STEPS = ['validating', 'analyzing', 'fetching'];
+const CAPTURE_BUSY_STATUSES = new Set(['validating', 'identifying', 'designing', 'animating', 'preparing']);
+const CAPTURE_STEPS = ['validating', 'identifying', 'designing', 'animating', 'preparing'];
 const CAPTURE_STATUS_LABELS = {
     validating: 'Checking plant',
-    analyzing: 'Identifying plant',
-    fetching: 'Preparing Jasmine'
+    identifying: 'Identifying plant',
+    designing: 'Designing avatar',
+    animating: 'Animating companion',
+    preparing: 'Preparing AR'
 };
 const NON_PLANT_CAPTURE_ERROR = 'No plant or tree detected. Try again.';
 const AVATAR_PROMPT_TIMEOUT_MS = 1800;
+const COMPANION_JOB_POLL_MS = 5000;
+const AR_CHAT_SPRITE_CROP = {
+    x: 0.16,
+    y: 0,
+    width: 0.72,
+    height: 0.94
+};
+const AR_CHAT_SPRITES = {
+    idle: {
+        url: '/assets/ar-character-idle.png',
+        columns: 4,
+        rows: 8,
+        frameCount: 30,
+        fps: 7,
+        loop: true
+    },
+    sunlight: {
+        url: '/assets/ar-character-sunlight.png',
+        columns: 4,
+        rows: 8,
+        frameCount: 30,
+        fps: 8,
+        loop: false
+    },
+    talking: {
+        url: '/assets/ar-character-talking.png',
+        columns: 4,
+        rows: 8,
+        frameCount: 30,
+        fps: 9,
+        loop: true
+    },
+    water: {
+        url: '/assets/ar-character-water.png',
+        columns: 4,
+        rows: 8,
+        frameCount: 30,
+        fps: 8,
+        loop: false
+    }
+};
+
+function readStoredArCompanion() {
+    try {
+        const value = window.sessionStorage?.getItem(AR_COMPANION_STORAGE_KEY);
+        return value ? JSON.parse(value) : null;
+    } catch {
+        return null;
+    }
+}
+
+function storeArCompanion(companion) {
+    try {
+        if (companion) {
+            window.sessionStorage?.setItem(AR_COMPANION_STORAGE_KEY, JSON.stringify(companion));
+        } else {
+            window.sessionStorage?.removeItem(AR_COMPANION_STORAGE_KEY);
+        }
+    } catch {
+        // Session storage is optional for the demo path.
+    }
+}
+
+function companionSprites(companion) {
+    return companion?.sprite_sheets || companion?.spriteSheets || null;
+}
+
+function applyArCompanionSprites(companion) {
+    const sprites = companionSprites(companion);
+    window.__AR_COMPANION_SPRITES__ = sprites || null;
+    window.dispatchEvent(new CustomEvent(AR_CHARACTER_SPRITE_SET_EVENT, {
+        detail: { sprites }
+    }));
+}
 
 function setArCharacterSprite(state) {
     window.dispatchEvent(new CustomEvent(AR_CHARACTER_SPRITE_EVENT, {
         detail: { state }
     }));
+}
+
+function normalizeArSpriteState(state) {
+    if (state === 'sun') {
+        return 'sunlight';
+    }
+
+    return AR_CHAT_SPRITES[state] ? state : 'idle';
 }
 
 function stopMediaStream(stream) {
@@ -287,6 +377,51 @@ async function fetchAvatarPromptBriefly(treeResult) {
     }
 }
 
+function captureStatusForCompanionStage(stage) {
+    if (stage === 'designing') {
+        return 'designing';
+    }
+    if (stage === 'animating') {
+        return 'animating';
+    }
+    if (stage === 'preparing_ar') {
+        return 'preparing';
+    }
+    return 'identifying';
+}
+
+function wait(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('Aborted', 'AbortError'));
+            return;
+        }
+
+        const timeoutId = window.setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => {
+            window.clearTimeout(timeoutId);
+            reject(new DOMException('Aborted', 'AbortError'));
+        }, { once: true });
+    });
+}
+
+async function pollPlantCompanionJob(jobId, { signal, onStage } = {}) {
+    let job = await fetchPlantCompanionJob(jobId, { signal });
+
+    while (job.status !== 'succeeded') {
+        if (job.status === 'failed') {
+            throw new Error(job.error || 'Companion generation failed.');
+        }
+
+        onStage?.(job.stage);
+        await wait(COMPANION_JOB_POLL_MS, signal);
+        job = await fetchPlantCompanionJob(jobId, { signal });
+    }
+
+    onStage?.('preparing_ar');
+    return job;
+}
+
 function currentBrowserRoute() {
     const cleanPath = window.location.pathname.replace(/\/+$/, '');
 
@@ -392,9 +527,16 @@ function useAuth() {
 function App() {
     const session = useAuth();
     const [browserRoute, setBrowserRoute] = useState(currentBrowserRoute);
+    const [arCompanion, setArCompanion] = useState(readStoredArCompanion);
 
     useEffect(() => {
-        const handlePopState = () => setBrowserRoute(currentBrowserRoute());
+        const handlePopState = () => {
+            const route = currentBrowserRoute();
+            if (route === 'ar') {
+                setArCompanion(readStoredArCompanion());
+            }
+            setBrowserRoute(route);
+        };
         window.addEventListener('popstate', handlePopState);
         return () => window.removeEventListener('popstate', handlePopState);
     }, []);
@@ -414,8 +556,19 @@ function App() {
         setBrowserRoute(currentBrowserRoute());
     }, []);
 
+    const openArMode = useCallback((companion = null) => {
+        storeArCompanion(companion);
+        setArCompanion(companion);
+        const url = new URL(window.location.href);
+        url.pathname = url.pathname.replace(new RegExp(`/${SAM3_ROUTE}/?$`), '') || '/';
+        url.searchParams.delete('route');
+        url.searchParams.set('mode', 'ar');
+        window.history.pushState({}, '', url);
+        setBrowserRoute('ar');
+    }, []);
+
     if (browserRoute === 'ar') {
-        return <LiveCameraDemo />;
+        return <LiveCameraDemo companion={arCompanion} />;
     }
 
     if (session === undefined) {
@@ -434,10 +587,16 @@ function App() {
         return <Sam3LiteTextScreen onBack={() => openBrowserRoute('')} />;
     }
 
-    return <GreenCreditPrototype session={session} onOpenSam3LiteText={() => openBrowserRoute(SAM3_ROUTE)} />;
+    return (
+        <GreenCreditPrototype
+            session={session}
+            onOpenSam3LiteText={() => openBrowserRoute(SAM3_ROUTE)}
+            onOpenAr={openArMode}
+        />
+    );
 }
 
-function LiveCameraDemo() {
+function LiveCameraDemo({ companion }) {
     useEffect(() => {
         let mounted = true;
         const updateViewportInsets = () => {
@@ -450,11 +609,13 @@ function LiveCameraDemo() {
         };
 
         updateViewportInsets();
+        applyArCompanionSprites(companion);
         window.addEventListener('resize', updateViewportInsets);
         window.visualViewport?.addEventListener('resize', updateViewportInsets);
         window.visualViewport?.addEventListener('scroll', updateViewportInsets);
         import('./cameraDemo.js').then(({ initializeCameraDemo }) => {
             if (mounted) {
+                applyArCompanionSprites(companion);
                 initializeCameraDemo();
                 Stats.el?.remove();
             }
@@ -468,7 +629,9 @@ function LiveCameraDemo() {
             document.documentElement.style.removeProperty('--ar-browser-ui-bottom');
             Stats.el?.remove();
         };
-    }, []);
+    }, [companion]);
+
+    const plantName = companion?.plant_name || companion?.plantName || 'Jasmine';
 
     return (
         <main className="camera-app">
@@ -476,9 +639,10 @@ function LiveCameraDemo() {
             <button id="place_image_button" type="button" aria-label="Place image marker" title="Place image marker" hidden></button>
             <button id="hand_toggle_button" type="button" aria-label="Enable hand interactions" aria-pressed="false" hidden>Hand</button>
             <div className="care-actions ar-care-actions" aria-label="AR care actions">
-                <button type="button" className="care-action water" aria-label="Water Jasmine" onClick={() => setArCharacterSprite('water')}></button>
-                <button type="button" className="care-action sun" aria-label="Give sunlight" onClick={() => setArCharacterSprite('sunlight')}></button>
+                <button type="button" className="care-action water" aria-label={`Water ${plantName}`} onClick={() => setArCharacterSprite('water')}></button>
+                <button type="button" className="care-action sun" aria-label={`Give sunlight to ${plantName}`} onClick={() => setArCharacterSprite('sunlight')}></button>
             </div>
+            <ArVoiceControls companion={companion} />
             <div id="gesture_status" data-action="hand_off">
                 <strong>Hand</strong>
                 <span>Hand off</span>
@@ -491,7 +655,163 @@ function LiveCameraDemo() {
     );
 }
 
-function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
+function ArVoiceControls({ companion }) {
+    const [liveCaption, setLiveCaption] = useState('');
+    const [asrStatus, setAsrStatus] = useState('idle');
+    const [asrError, setAsrError] = useState('');
+    const [ttsStatus, setTtsStatus] = useState('idle');
+    const [ttsError, setTtsError] = useState('');
+    const asrSessionRef = useRef(null);
+    const ttsSessionRef = useRef(null);
+    const stopListeningRef = useRef(null);
+    const plantName = companion?.plant_name || companion?.plantName || 'Jasmine';
+    const responseInstructions = companion?.persona?.system_prompt || companion?.system_prompt || null;
+
+    const stopAsrSession = useCallback(() => {
+        asrSessionRef.current?.stop();
+        asrSessionRef.current = null;
+        setAsrStatus('idle');
+    }, []);
+
+    const stopTtsSession = useCallback(() => {
+        ttsSessionRef.current?.stop();
+        ttsSessionRef.current = null;
+        setTtsStatus('idle');
+        setArCharacterSprite('idle');
+    }, []);
+
+    const speakTranscript = useCallback((transcript) => {
+        stopTtsSession();
+        setTtsError('');
+        setTtsStatus('connecting');
+        setArCharacterSprite('talking');
+
+        const session = createVoiceReplySession({
+            text: transcript,
+            responseInstructions,
+            onStatus: (status) => {
+                setTtsStatus(status);
+                setArCharacterSprite(
+                    status === 'connecting' || status === 'speaking' || status === 'playing'
+                        ? 'talking'
+                        : 'idle'
+                );
+            },
+            onError: (message) => {
+                setTtsError(message);
+                setTtsStatus('error');
+                setArCharacterSprite('idle');
+            }
+        });
+
+        ttsSessionRef.current = session;
+        session.start()
+            .then(() => {
+                ttsSessionRef.current = null;
+                setArCharacterSprite('idle');
+            })
+            .catch((error) => {
+                const message = error instanceof Error ? error.message : 'Could not play avatar response.';
+                setTtsError(message);
+                setTtsStatus('error');
+                ttsSessionRef.current = null;
+                setArCharacterSprite('idle');
+            });
+    }, [responseInstructions, stopTtsSession]);
+
+    const handleStream = useCallback((stream) => {
+        stopAsrSession();
+        stopTtsSession();
+        setLiveCaption('');
+        setAsrError('');
+        setTtsError('');
+        setTtsStatus('idle');
+
+        const session = createRealtimeAsrSession({
+            stream,
+            onStatus: setAsrStatus,
+            onPartial: setLiveCaption,
+            onCompleted: (transcript) => {
+                setLiveCaption(transcript);
+                stopAsrSession();
+                stopListeningRef.current?.();
+                speakTranscript(transcript);
+            },
+            onError: (message) => {
+                setAsrError(message);
+                setAsrStatus('error');
+            }
+        });
+
+        asrSessionRef.current = session;
+        session.start().catch((error) => {
+            const message = error instanceof Error ? error.message : 'Could not start ASR.';
+            setAsrError(message);
+            setAsrStatus('error');
+        });
+    }, [speakTranscript, stopAsrSession, stopTtsSession]);
+
+    const { isListening, startListening, stopListening } = useMicrophone({ onStream: handleStream });
+
+    useEffect(() => {
+        stopListeningRef.current = stopListening;
+    }, [stopListening]);
+
+    useEffect(() => () => {
+        stopAsrSession();
+        stopTtsSession();
+        stopListening();
+    }, [stopAsrSession, stopListening, stopTtsSession]);
+
+    const handleMicClick = async () => {
+        if (isListening) {
+            stopAsrSession();
+            stopListening();
+            return;
+        }
+
+        stopTtsSession();
+        setAsrError('');
+        setTtsError('');
+        setLiveCaption('');
+        try {
+            await prepareVoiceReplyAudio();
+            await startListening();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Microphone permission failed.';
+            setAsrError(message);
+            setAsrStatus('error');
+        }
+    };
+
+    const isResponding = ttsStatus === 'connecting' || ttsStatus === 'speaking' || ttsStatus === 'playing';
+    const errorText = asrError || ttsError;
+    const statusText = errorText || liveCaption || (
+        isResponding
+            ? `${plantName} is speaking`
+            : asrStatus === 'connecting'
+                ? 'Connecting'
+                : isListening
+                    ? 'Listening'
+                    : `Talk to ${plantName}`
+    );
+
+    return (
+        <div className={`ar-voice-controls${isListening ? ' is-listening' : ''}${isResponding ? ' is-speaking' : ''}${errorText ? ' has-error' : ''}`}>
+            <button
+                type="button"
+                className="ar-voice-button"
+                aria-label={isListening ? 'Stop listening' : `Talk to ${plantName}`}
+                aria-pressed={isListening}
+                disabled={isResponding}
+                onClick={handleMicClick}
+            ></button>
+            <span className="ar-voice-status" aria-live="polite">{statusText}</span>
+        </div>
+    );
+}
+
+function GreenCreditPrototype({ session, onOpenSam3LiteText, onOpenAr }) {
     const handleSignOut = useCallback(async () => {
         if (!isSupabaseConfigured) {
             return;
@@ -540,8 +860,8 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
             <CaptureScreen
                 onBack={() => navigate(captureReturnScreen, 'back')}
                 onCapture={(result) => {
-                    setCaptureAnalysisResult(result);
-                    goChat('intro', 'capture', { slideUpPanel: true });
+                    setCaptureAnalysisResult(result.plant_analysis || result);
+                    onOpenAr(result);
                 }}
             />
         );
@@ -573,6 +893,7 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
                     setCaptureReturnScreen('home');
                     navigate('capture', 'forward');
                 }}
+                onOpenQuickAr={() => onOpenAr(null)}
                 onTestAvatar={async () => {
                     const fixedTreeResult = { tree_name: 'Jasmine', carbon_credit_estimate: 45 };
                     const avatarPrompt = await fetchPlantAvatarPrompt(fixedTreeResult).catch(() => null);
@@ -597,7 +918,7 @@ function GreenCreditPrototype({ session, onOpenSam3LiteText }) {
     );
 }
 
-function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenSam3LiteText, onOpenCapture, onTestAvatar, userEmail, onSignOut, canSignOut }) {
+function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis, onOpenSam3LiteText, onOpenCapture, onOpenQuickAr, onTestAvatar, userEmail, onSignOut, canSignOut }) {
     const [testingAvatar, setTestingAvatar] = useState(false);
 
     const handleTestAvatar = async () => {
@@ -624,8 +945,8 @@ function HomeScreen({ onOpenDetail, onOpenStore, onOpenInfo, onOpenTreeAnalysis,
                     <button type="button" onClick={onOpenSam3LiteText}>SAM3-LiteText test</button>
                     <button type="button" onClick={() => onOpenInfo('about')}>About the app</button>
                     <button type="button" onClick={() => onOpenInfo('makers')}>Meet the makers</button>
-                    <button type="button" onClick={onOpenCapture}>
-                        Live AR camera
+                    <button type="button" onClick={onOpenQuickAr}>
+                        Quick AR demo
                     </button>
                     <button type="button" onClick={handleTestAvatar} disabled={testingAvatar}>
                         {testingAvatar ? 'Loading avatar…' : 'Test avatar prompt'}
@@ -758,42 +1079,42 @@ function CaptureScreen({ onBack, onCapture }) {
         }
 
         setError('');
-        let analysisController = null;
+        let companionController = null;
 
         try {
             const file = await captureFrameFile(video);
-            analysisController = new AbortController();
+            companionController = new AbortController();
 
             setStatus('validating');
-            const analysisPromise = withOutcome(analyzeTreePhoto(file, { signal: analysisController.signal }));
             const segmentation = await analyzeSam3LiteTextPhoto(file, { text: 'tree or plant' });
 
             if (!segmentation.result.has_objects) {
-                analysisController.abort();
+                companionController.abort();
                 setError(NON_PLANT_CAPTURE_ERROR);
                 setStatus('error');
                 return;
             }
 
-            setStatus('analyzing');
-            const analysisOutcome = await analysisPromise;
+            setStatus('identifying');
+            const initialJob = await createPlantCompanionJob(file, { signal: companionController.signal });
+            const companionJob = await pollPlantCompanionJob(initialJob.job_id, {
+                signal: companionController.signal,
+                onStage: (stage) => setStatus(captureStatusForCompanionStage(stage))
+            });
 
-            if (analysisOutcome.error) {
-                throw analysisOutcome.error;
-            }
-
-            if (!isPlantAnalysisResult(analysisOutcome.value.result)) {
+            if (!isPlantAnalysisResult(companionJob.plant_analysis || { tree_name: companionJob.plant_name })) {
                 setError(NON_PLANT_CAPTURE_ERROR);
                 setStatus('error');
                 return;
             }
 
-            setStatus('fetching');
-            const avatarPrompt = await fetchAvatarPromptBriefly(analysisOutcome.value.result);
-
-            onCapture({ ...analysisOutcome.value.result, avatarPrompt });
+            setStatus('preparing');
+            onCapture(companionJob);
         } catch (captureError) {
-            analysisController?.abort();
+            companionController?.abort();
+            if (captureError?.name === 'AbortError') {
+                return;
+            }
             setError(captureError instanceof Error ? captureError.message : 'Analysis failed. Please try again.');
             setStatus('error');
         }
@@ -1399,28 +1720,151 @@ function Sam3LiteTextRawOutput({ result }) {
     );
 }
 
-function CameraDemoBackground() {
-    const initializedRef = useRef(false);
+function ArChatBackground() {
+    const videoRef = useRef(null);
+    const canvasRef = useRef(null);
+    const streamRef = useRef(null);
 
     useEffect(() => {
-        if (initializedRef.current) return;
-        initializedRef.current = true;
+        let disposed = false;
+        let frameId = 0;
+        let spriteState = 'idle';
+        let spriteStartedAt = performance.now();
+        const imageCache = new Map();
 
-        initializeCameraDemo();
-        document.getElementById('start_button')?.click();
+        const loadSpriteImage = (state) => {
+            const sprite = AR_CHAT_SPRITES[state] || AR_CHAT_SPRITES.idle;
+            const cached = imageCache.get(state);
+
+            if (cached) {
+                return { sprite, image: cached };
+            }
+
+            const image = new Image();
+            image.src = sprite.url;
+            imageCache.set(state, image);
+
+            return { sprite, image };
+        };
+
+        const setSpriteState = (state) => {
+            const nextState = normalizeArSpriteState(state);
+
+            if (nextState === spriteState) {
+                return;
+            }
+
+            spriteState = nextState;
+            spriteStartedAt = performance.now();
+            loadSpriteImage(spriteState);
+        };
+
+        const drawSprite = (time) => {
+            const canvas = canvasRef.current;
+            const context = canvas?.getContext('2d');
+
+            if (!canvas || !context) {
+                return;
+            }
+
+            const rect = canvas.getBoundingClientRect();
+            const dpr = Math.max(1, window.devicePixelRatio || 1);
+            const width = Math.max(1, Math.round(rect.width * dpr));
+            const height = Math.max(1, Math.round(rect.height * dpr));
+
+            if (canvas.width !== width || canvas.height !== height) {
+                canvas.width = width;
+                canvas.height = height;
+            }
+
+            context.clearRect(0, 0, width, height);
+
+            let { sprite, image } = loadSpriteImage(spriteState);
+            if (image.complete && image.naturalWidth && image.naturalHeight) {
+                let frame = Math.floor(Math.max(0, time - spriteStartedAt) / 1000 * sprite.fps);
+
+                if (sprite.loop) {
+                    frame %= sprite.frameCount;
+                } else if (frame >= sprite.frameCount) {
+                    spriteState = 'idle';
+                    spriteStartedAt = time;
+                    ({ sprite, image } = loadSpriteImage(spriteState));
+                    frame = 0;
+                }
+
+                const column = frame % sprite.columns;
+                const row = Math.floor(frame / sprite.columns);
+                const cellWidth = image.naturalWidth / sprite.columns;
+                const cellHeight = image.naturalHeight / sprite.rows;
+                const sourceX = (column + AR_CHAT_SPRITE_CROP.x) * cellWidth;
+                const sourceY = (row + AR_CHAT_SPRITE_CROP.y) * cellHeight;
+                const sourceWidth = cellWidth * AR_CHAT_SPRITE_CROP.width;
+                const sourceHeight = cellHeight * AR_CHAT_SPRITE_CROP.height;
+                const frameAspect = sourceWidth / sourceHeight;
+                const targetHeight = Math.min(height * 0.5, width * 0.76 / frameAspect);
+                const targetWidth = targetHeight * frameAspect;
+                const targetX = (width - targetWidth) * 0.5;
+                const targetY = height * 0.45;
+
+                context.drawImage(
+                    image,
+                    sourceX,
+                    sourceY,
+                    sourceWidth,
+                    sourceHeight,
+                    targetX,
+                    targetY,
+                    targetWidth,
+                    targetHeight
+                );
+            }
+
+            frameId = window.requestAnimationFrame(drawSprite);
+        };
+
+        const handleSpriteState = (event) => {
+            setSpriteState(event.detail?.state || event.detail?.action);
+        };
+
+        window.addEventListener(AR_CHARACTER_SPRITE_EVENT, handleSpriteState);
+        loadSpriteImage(spriteState);
+        frameId = window.requestAnimationFrame(drawSprite);
+
+        if (navigator.mediaDevices?.getUserMedia) {
+            navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            }).then((stream) => {
+                if (disposed) {
+                    stopMediaStream(stream);
+                    return;
+                }
+
+                streamRef.current = stream;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.play().catch(() => {});
+                }
+            }).catch(() => {});
+        }
 
         return () => {
-            Stats.el?.remove();
+            disposed = true;
+            window.cancelAnimationFrame(frameId);
+            window.removeEventListener(AR_CHARACTER_SPRITE_EVENT, handleSpriteState);
+            stopMediaStream(streamRef.current);
+            streamRef.current = null;
         };
     }, []);
 
     return (
-        <div id="container" className="camera-demo-bg" aria-hidden="true">
-            <div id="overlay">
-                <div id="splash"></div>
-                <button id="start_button" type="button" style={{ display: 'none' }}>Start</button>
-            </div>
-            <div id="gesture_status" data-action=""><span></span></div>
+        <div className="chat-ar-bg" aria-hidden="true">
+            <video ref={videoRef} className="chat-ar-video" autoPlay playsInline muted />
+            <canvas ref={canvasRef} className="chat-ar-sprite"></canvas>
         </div>
     );
 }
@@ -1428,6 +1872,7 @@ function CameraDemoBackground() {
 function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false, analysisResult, avatarPrompt }) {
     const [panelSlideIn, setPanelSlideIn] = useState(!slideUpPanel);
     const [careAnimation, setCareAnimation] = useState(null);
+    const hasPlantAnalysis = Boolean(analysisResult?.tree_name || analysisResult?.tree_species);
 
     useEffect(() => {
         if (!slideUpPanel) {
@@ -1462,8 +1907,12 @@ function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false, ana
 
     return (
         <main className={`prototype-shell chat-screen chat-${chatState}`}>
-            <section className="chat-hero">
-                <div className="chat-photo foliage-scene" aria-hidden="true"></div>
+            <section className={`chat-hero${hasPlantAnalysis ? ' chat-hero--ar' : ''}`}>
+                {hasPlantAnalysis ? (
+                    <ArChatBackground />
+                ) : (
+                    <div className="chat-photo foliage-scene" aria-hidden="true"></div>
+                )}
                 {careAnimation === 'water' && (
                     <div className="care-effect care-effect--water" aria-hidden="true"></div>
                 )}
