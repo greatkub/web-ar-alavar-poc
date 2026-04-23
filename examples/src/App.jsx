@@ -1513,7 +1513,6 @@ function ChatIntro({ onTalk, analysisResult }) {
 }
 
 function ChatTranscript({ analysisResult, avatarPrompt }) {
-    const [lines, setLines] = useState([]);
     const [liveCaption, setLiveCaption] = useState('');
     const [asrStatus, setAsrStatus] = useState('idle');
     const [asrError, setAsrError] = useState('');
@@ -1555,7 +1554,6 @@ function ChatTranscript({ analysisResult, avatarPrompt }) {
         ttsSessionRef.current = session;
         session.start()
             .then(() => {
-                setLines(previousLines => [...previousLines, `Jasmine: ${transcript}`].slice(-8));
                 ttsSessionRef.current = null;
             })
             .catch((error) => {
@@ -1582,7 +1580,6 @@ function ChatTranscript({ analysisResult, avatarPrompt }) {
             },
             onCompleted: (transcript) => {
                 setLiveCaption(transcript);
-                setLines(previousLines => [...previousLines, `You: ${transcript}`].slice(-8));
                 stopAsrSession();
                 stopListeningRef.current?.();
                 speakTranscript(transcript);
@@ -1636,7 +1633,7 @@ function ChatTranscript({ analysisResult, avatarPrompt }) {
     const errorText = asrError || ttsError;
     const overlayText = errorText || liveCaption || (asrStatus === 'connecting' ? 'Connecting ASR...' : 'Listening...');
     const hasLiveCaption = Boolean(liveCaption && !errorText);
-    const overlayLabel = isResponding ? 'Jasmine is speaking...' : 'Listening...';
+    const overlayLabel = isResponding ? 'You are speaking...' : 'Listening...';
     const micDisabled = isResponding;
 
     useEffect(() => {
@@ -1647,14 +1644,6 @@ function ChatTranscript({ analysisResult, avatarPrompt }) {
 
     return (
         <div className={`chat-transcript${isListening ? ' is-listening' : ''}${isResponding ? ' is-responding' : ''}${errorText ? ' has-error' : ''}`}>
-            <div className="chat-transcript-lines" tabIndex={0} aria-label="Conversation transcript">
-                {lines.map((line, index) => (
-                    <p key={`${line}-${index}`} className={index % 2 === 1 ? 'faded' : ''}>{line}</p>
-                ))}
-                {errorText && !isListening && !isResponding && (
-                    <p className="chat-transcript-error">{errorText}</p>
-                )}
-            </div>
             <div className="chat-transcript-listening-overlay" aria-live="polite" aria-hidden={!isListening && !isResponding}>
                 {hasLiveCaption && <span className="asr-status-label">{overlayLabel}</span>}
                 <strong className={hasLiveCaption ? 'asr-caption' : ''}>{overlayText}</strong>
