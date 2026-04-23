@@ -14,7 +14,7 @@ const TREE_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_TREE_IMAGE_MAX_WIDTH ||
 const TREE_IMAGE_JPEG_QUALITY = Number(import.meta.env.VITE_TREE_IMAGE_JPEG_QUALITY || 0.72);
 const TREE_ANALYSIS_ENABLE_THINKING = booleanSetting(
     import.meta.env.VITE_TREE_ANALYSIS_ENABLE_THINKING,
-    false
+    true
 );
 
 function numericSetting(value, fallback, min, max) {
