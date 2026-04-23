@@ -175,7 +175,7 @@ export async function analyzeTreePhoto(file, { signal } = {}) {
 
 export async function fetchPlantAvatarPrompt(treeResult, { language = 'en', signal } = {}) {
     const plantName = treeResult.tree_name || treeResult.tree_species || 'Unknown plant';
-    const carbonKgPerYear = Number(treeResult.carbon_credit_estimate) || 0;
+    const carbonKgPerYear = Number(treeResult.carbon_credit_estimate) || 1;
 
     const headers = {
         'Content-Type': 'application/json'

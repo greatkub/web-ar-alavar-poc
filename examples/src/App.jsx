@@ -26,7 +26,6 @@ const CAPTURE_STATUS_LABELS = {
     fetching: 'Preparing Jasmine'
 };
 const NON_PLANT_CAPTURE_ERROR = 'No plant or tree detected. Try again.';
-const AVATAR_PROMPT_TIMEOUT_MS = 1800;
 
 function setArCharacterSprite(state) {
     window.dispatchEvent(new CustomEvent(AR_CHARACTER_SPRITE_EVENT, {
@@ -275,15 +274,10 @@ function isPlantAnalysisResult(treeResult) {
 }
 
 async function fetchAvatarPromptBriefly(treeResult) {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), AVATAR_PROMPT_TIMEOUT_MS);
-
     try {
-        return await fetchPlantAvatarPrompt(treeResult, { signal: controller.signal });
+        return await fetchPlantAvatarPrompt(treeResult);
     } catch {
         return null;
-    } finally {
-        window.clearTimeout(timeoutId);
     }
 }
 
@@ -1399,7 +1393,7 @@ function Sam3LiteTextRawOutput({ result }) {
     );
 }
 
-function CameraDemoBackground() {
+function ARCameraHero() {
     const initializedRef = useRef(false);
 
     useEffect(() => {
@@ -1421,6 +1415,8 @@ function CameraDemoBackground() {
                 <button id="start_button" type="button" style={{ display: 'none' }}>Start</button>
             </div>
             <div id="gesture_status" data-action=""><span></span></div>
+            <button id="place_image_button" type="button" hidden>Place</button>
+            <button id="hand_toggle_button" type="button" hidden>Hand</button>
         </div>
     );
 }
@@ -1463,7 +1459,7 @@ function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false, ana
     return (
         <main className={`prototype-shell chat-screen chat-${chatState}`}>
             <section className="chat-hero">
-                <div className="chat-photo foliage-scene" aria-hidden="true"></div>
+                <ARCameraHero />
                 {careAnimation === 'water' && (
                     <div className="care-effect care-effect--water" aria-hidden="true"></div>
                 )}
@@ -1539,8 +1535,11 @@ function ChatTranscript() {
         setTtsError('');
         setTtsStatus('connecting');
 
+        const persona = avatarPrompt ?? analysisResult?.avatarPrompt ?? undefined;
+
         const session = createVoiceReplySession({
             text: transcript,
+            persona,
             onStatus: setTtsStatus,
             onError: (message) => {
                 setTtsError(message);
