@@ -23,7 +23,7 @@ const CAPTURE_STEPS = ['validating', 'analyzing', 'fetching'];
 const CAPTURE_STATUS_LABELS = {
     validating: 'Checking plant',
     analyzing: 'Identifying plant',
-    fetching: 'Preparing Jasmine'
+    fetching: 'Preparing'
 };
 const NON_PLANT_CAPTURE_ERROR = 'No plant or tree detected. Try again.';
 

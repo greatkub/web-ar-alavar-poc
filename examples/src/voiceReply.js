@@ -97,15 +97,13 @@ export function createVoiceReplySession({ text, persona, onStatus, onError }) {
             headers['Authorization'] = `Bearer ${REPLY_BEARER_TOKEN}`;
         }
 
+        const personaStr = typeof persona === 'string'
+            ? persona
+            : (persona?.prompt ?? persona?.persona ?? persona?.text ?? null);
+
         const body = {
             text,
-            response_model: import.meta.env.VITE_REPLY_RESPONSE_MODEL || 'qwen3.6-plus',
-            tts_model: import.meta.env.VITE_TTS_MODEL || 'qwen3-tts-vd-realtime-2026-01-15',
-            voice: import.meta.env.VITE_TTS_VOICE || 'myvoice',
-            region: import.meta.env.VITE_TTS_REGION || 'international',
-            language: import.meta.env.VITE_REPLY_LANGUAGE || 'en',
-            audio_format: 'pcm',
-            ...(persona ? { persona } : {})
+            ...(personaStr ? { persona: personaStr } : {})
         };
 
         let response;
