@@ -4,13 +4,18 @@ const TREE_ANALYSIS_URL = import.meta.env.VITE_TREE_ANALYSIS_URL ||
     `${API_BASE_URL}/tree/analyze`;
 const PLANT_AVATAR_PROMPT_URL = import.meta.env.VITE_PLANT_AVATAR_PROMPT_URL ||
     `${API_BASE_URL}/plant/avatar/prompt`;
+const TREE_ANALYSIS_MODEL = import.meta.env.VITE_TREE_ANALYSIS_MODEL || 'qwen3.6-flash';
 const TREE_ANALYSIS_CLIENT_TOKEN = (
     import.meta.env.VITE_TREE_ANALYSIS_CLIENT_TOKEN ||
     import.meta.env.VITE_API_AUTH_TOKEN ||
     ''
 ).trim();
-const TREE_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_TREE_IMAGE_MAX_WIDTH || 1280);
-const TREE_IMAGE_JPEG_QUALITY = Number(import.meta.env.VITE_TREE_IMAGE_JPEG_QUALITY || 0.8);
+const TREE_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_TREE_IMAGE_MAX_WIDTH || 896);
+const TREE_IMAGE_JPEG_QUALITY = Number(import.meta.env.VITE_TREE_IMAGE_JPEG_QUALITY || 0.72);
+const TREE_ANALYSIS_ENABLE_THINKING = booleanSetting(
+    import.meta.env.VITE_TREE_ANALYSIS_ENABLE_THINKING,
+    false
+);
 
 function numericSetting(value, fallback, min, max) {
     if (!Number.isFinite(value)) {
@@ -18,6 +23,14 @@ function numericSetting(value, fallback, min, max) {
     }
 
     return Math.min(max, Math.max(min, value));
+}
+
+function booleanSetting(value, fallback) {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+
+    return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
 
 function loadImage(file) {
@@ -136,9 +149,9 @@ export async function analyzeTreePhoto(file, { signal } = {}) {
         signal,
         body: JSON.stringify({
             image: image.dataUrl,
-            model: 'qwen3.6-flash',
+            model: TREE_ANALYSIS_MODEL,
             region: 'international',
-            enable_thinking: true,
+            enable_thinking: TREE_ANALYSIS_ENABLE_THINKING,
             use_image_search: false
         })
     });

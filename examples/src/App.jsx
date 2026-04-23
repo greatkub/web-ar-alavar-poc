@@ -16,6 +16,276 @@ import {
 } from './sam3LiteText.js';
 
 const SAM3_ROUTE = 'sam3-litetext';
+const AR_CHARACTER_SPRITE_EVENT = 'archaractersprite';
+const CAPTURE_IMAGE_MAX_WIDTH = 1280;
+const CAPTURE_BUSY_STATUSES = new Set(['validating', 'analyzing', 'fetching']);
+const CAPTURE_STEPS = ['validating', 'analyzing', 'fetching'];
+const CAPTURE_STATUS_LABELS = {
+    validating: 'Checking plant',
+    analyzing: 'Identifying plant',
+    fetching: 'Preparing Jasmine'
+};
+const NON_PLANT_CAPTURE_ERROR = 'No plant or tree detected. Try again.';
+const AVATAR_PROMPT_TIMEOUT_MS = 1800;
+
+function setArCharacterSprite(state) {
+    window.dispatchEvent(new CustomEvent(AR_CHARACTER_SPRITE_EVENT, {
+        detail: { state }
+    }));
+}
+
+function stopMediaStream(stream) {
+    stream?.getTracks().forEach((track) => track.stop());
+}
+
+function cameraAccessErrorMessage(error) {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        return 'Camera requires HTTPS or localhost. Open the app from a secure origin and try again.';
+    }
+
+    if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+        return 'Camera access denied. Please allow camera permission and try again.';
+    }
+
+    if (error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError') {
+        return 'No camera found on this device.';
+    }
+
+    if (error?.name === 'NotReadableError') {
+        return 'Camera is busy in another app or tab.';
+    }
+
+    return 'Could not open camera. Check browser camera permissions and try again.';
+}
+
+function captureFrameFile(video) {
+    if (!video.videoWidth || !video.videoHeight || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return Promise.reject(new Error('Camera is still starting. Try again in a moment.'));
+    }
+
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    const scale = Math.min(1, CAPTURE_IMAGE_MAX_WIDTH / sourceWidth);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+
+    if (!context) {
+        return Promise.reject(new Error('Could not prepare camera frame. Try again.'));
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+    context.drawImage(video, 0, 0, width, height);
+
+    return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+            if (!blob) {
+                reject(new Error('Could not capture photo. Try again.'));
+                return;
+            }
+
+            resolve(new File([blob], 'capture.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.82);
+    });
+}
+
+function useLivePhotoCapture(onCapture) {
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    const mountedRef = useRef(true);
+    const [cameraActive, setCameraActive] = useState(false);
+    const [cameraStarting, setCameraStarting] = useState(false);
+    const [cameraCapturing, setCameraCapturing] = useState(false);
+    const [cameraError, setCameraError] = useState('');
+
+    const teardownCamera = useCallback(() => {
+        stopMediaStream(streamRef.current);
+        streamRef.current = null;
+
+        if (videoRef.current) {
+            videoRef.current.srcObject = null;
+        }
+    }, []);
+
+    const stopCamera = useCallback(() => {
+        teardownCamera();
+        setCameraActive(false);
+        setCameraStarting(false);
+        setCameraCapturing(false);
+    }, [teardownCamera]);
+
+    useEffect(() => () => {
+        mountedRef.current = false;
+        teardownCamera();
+    }, [teardownCamera]);
+
+    useEffect(() => {
+        const video = videoRef.current;
+
+        if (!cameraActive || !video || !streamRef.current) {
+            return;
+        }
+
+        video.srcObject = streamRef.current;
+        video.play().catch(() => {
+            if (!mountedRef.current) {
+                return;
+            }
+
+            setCameraError('Camera opened, but playback did not start. Tap Open camera again.');
+            stopCamera();
+        });
+    }, [cameraActive, stopCamera]);
+
+    const openCamera = useCallback(async () => {
+        setCameraError('');
+
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+            setCameraError(cameraAccessErrorMessage());
+            return;
+        }
+
+        setCameraStarting(true);
+        stopMediaStream(streamRef.current);
+        streamRef.current = null;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            });
+
+            if (!mountedRef.current) {
+                stopMediaStream(stream);
+                return;
+            }
+
+            streamRef.current = stream;
+            setCameraActive(true);
+        } catch (error) {
+            stopMediaStream(streamRef.current);
+            streamRef.current = null;
+
+            if (mountedRef.current) {
+                setCameraActive(false);
+                setCameraError(cameraAccessErrorMessage(error));
+            }
+        } finally {
+            if (mountedRef.current) {
+                setCameraStarting(false);
+            }
+        }
+    }, []);
+
+    const captureCamera = useCallback(async () => {
+        const video = videoRef.current;
+
+        if (!video || cameraCapturing) {
+            return;
+        }
+
+        setCameraCapturing(true);
+        setCameraError('');
+
+        try {
+            const file = await captureFrameFile(video);
+            onCapture(file);
+            stopCamera();
+        } catch (error) {
+            if (mountedRef.current) {
+                setCameraError(error instanceof Error ? error.message : 'Could not capture photo. Try again.');
+                setCameraCapturing(false);
+            }
+        }
+    }, [cameraCapturing, onCapture, stopCamera]);
+
+    const clearCameraError = useCallback(() => setCameraError(''), []);
+
+    return {
+        cameraActive,
+        cameraStarting,
+        cameraCapturing,
+        cameraError,
+        clearCameraError,
+        openCamera,
+        captureCamera,
+        stopCamera,
+        videoRef
+    };
+}
+
+function withOutcome(promise) {
+    return promise.then(
+        (value) => ({ value }),
+        (error) => ({ error })
+    );
+}
+
+function analysisText(treeResult) {
+    return [
+        treeResult?.tree_name,
+        treeResult?.tree_species,
+        treeResult?.plant_name,
+        treeResult?.common_name,
+        treeResult?.image_summary,
+        treeResult?.summary,
+        treeResult?.description,
+        treeResult?.notes
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+}
+
+function isPlantAnalysisResult(treeResult) {
+    const name = String(
+        treeResult?.tree_name ||
+        treeResult?.tree_species ||
+        treeResult?.plant_name ||
+        treeResult?.common_name ||
+        ''
+    ).trim().toLowerCase();
+    const text = analysisText(treeResult);
+
+    if (!name) {
+        return false;
+    }
+
+    if (/\b(none|unknown|unidentified|not identified|not applicable|n\/a)\b/.test(name)) {
+        return false;
+    }
+
+    if (
+        /\b(no|not|without)\s+(visible\s+)?(plant|tree|vegetation|foliage)\b/.test(text) ||
+        /\brather than (a\s+)?(plant|tree)\b/.test(text)
+    ) {
+        return false;
+    }
+
+    const hasPlantCue = /\b(plant|tree|vegetation|foliage|leaf|leaves|flower|shrub|grass|palm|jasmine|lily|monstera)\b/.test(text);
+    const hasNonPlantSubject = /\b(person|human|face|selfie|bed|pillow|bedding)\b/.test(text);
+
+    return !hasNonPlantSubject || hasPlantCue;
+}
+
+async function fetchAvatarPromptBriefly(treeResult) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), AVATAR_PROMPT_TIMEOUT_MS);
+
+    try {
+        return await fetchPlantAvatarPrompt(treeResult, { signal: controller.signal });
+    } catch {
+        return null;
+    } finally {
+        window.clearTimeout(timeoutId);
+    }
+}
 
 function currentBrowserRoute() {
     const cleanPath = window.location.pathname.replace(/\/+$/, '');
@@ -144,6 +414,10 @@ function App() {
         setBrowserRoute(currentBrowserRoute());
     }, []);
 
+    if (browserRoute === 'ar') {
+        return <LiveCameraDemo />;
+    }
+
     if (session === undefined) {
         return (
             <div className="signin-loading">
@@ -156,10 +430,6 @@ function App() {
         return <SignInScreen />;
     }
 
-    if (browserRoute === 'ar') {
-        return <LiveCameraDemo />;
-    }
-
     if (browserRoute === SAM3_ROUTE) {
         return <Sam3LiteTextScreen onBack={() => openBrowserRoute('')} />;
     }
@@ -170,15 +440,33 @@ function App() {
 function LiveCameraDemo() {
     useEffect(() => {
         let mounted = true;
+        const updateViewportInsets = () => {
+            const viewport = window.visualViewport;
+            const bottomInset = viewport
+                ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+                : 0;
 
+            document.documentElement.style.setProperty('--ar-browser-ui-bottom', `${Math.ceil(bottomInset)}px`);
+        };
+
+        updateViewportInsets();
+        window.addEventListener('resize', updateViewportInsets);
+        window.visualViewport?.addEventListener('resize', updateViewportInsets);
+        window.visualViewport?.addEventListener('scroll', updateViewportInsets);
         import('./cameraDemo.js').then(({ initializeCameraDemo }) => {
             if (mounted) {
                 initializeCameraDemo();
+                Stats.el?.remove();
             }
         });
 
         return () => {
             mounted = false;
+            window.removeEventListener('resize', updateViewportInsets);
+            window.visualViewport?.removeEventListener('resize', updateViewportInsets);
+            window.visualViewport?.removeEventListener('scroll', updateViewportInsets);
+            document.documentElement.style.removeProperty('--ar-browser-ui-bottom');
+            Stats.el?.remove();
         };
     }, []);
 
@@ -187,6 +475,10 @@ function LiveCameraDemo() {
             <div id="container"></div>
             <button id="place_image_button" type="button" aria-label="Place image marker" title="Place image marker" hidden></button>
             <button id="hand_toggle_button" type="button" aria-label="Enable hand interactions" aria-pressed="false" hidden>Hand</button>
+            <div className="care-actions ar-care-actions" aria-label="AR care actions">
+                <button type="button" className="care-action water" aria-label="Water Jasmine" onClick={() => setArCharacterSprite('water')}></button>
+                <button type="button" className="care-action sun" aria-label="Give sunlight" onClick={() => setArCharacterSprite('sunlight')}></button>
+            </div>
             <div id="gesture_status" data-action="hand_off">
                 <strong>Hand</strong>
                 <span>Hand off</span>
@@ -461,50 +753,55 @@ function CaptureScreen({ onBack, onCapture }) {
 
     const handleCapture = async () => {
         const video = videoRef.current;
-        if (!video || status === 'validating' || status === 'analyzing') {
+        if (!video || CAPTURE_BUSY_STATUSES.has(status)) {
             return;
         }
 
         setError('');
-
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const blob = await new Promise((resolve) =>
-            canvas.toBlob(resolve, 'image/jpeg', 0.85)
-        );
-        const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+        let analysisController = null;
 
         try {
+            const file = await captureFrameFile(video);
+            analysisController = new AbortController();
+
             setStatus('validating');
+            const analysisPromise = withOutcome(analyzeTreePhoto(file, { signal: analysisController.signal }));
             const segmentation = await analyzeSam3LiteTextPhoto(file, { text: 'tree or plant' });
 
             if (!segmentation.result.has_objects) {
-                setError('No plant or tree detected. Try again.');
+                analysisController.abort();
+                setError(NON_PLANT_CAPTURE_ERROR);
                 setStatus('error');
                 return;
             }
 
             setStatus('analyzing');
-            const analysis = await analyzeTreePhoto(file);
+            const analysisOutcome = await analysisPromise;
+
+            if (analysisOutcome.error) {
+                throw analysisOutcome.error;
+            }
+
+            if (!isPlantAnalysisResult(analysisOutcome.value.result)) {
+                setError(NON_PLANT_CAPTURE_ERROR);
+                setStatus('error');
+                return;
+            }
 
             setStatus('fetching');
-            const avatarPrompt = await fetchPlantAvatarPrompt(analysis.result).catch(() => null);
+            const avatarPrompt = await fetchAvatarPromptBriefly(analysisOutcome.value.result);
 
-            onCapture({ ...analysis.result, avatarPrompt });
+            onCapture({ ...analysisOutcome.value.result, avatarPrompt });
         } catch (captureError) {
+            analysisController?.abort();
             setError(captureError instanceof Error ? captureError.message : 'Analysis failed. Please try again.');
             setStatus('error');
         }
     };
 
-    const busy = status === 'validating' || status === 'analyzing' || status === 'fetching';
-    const statusLabel =
-        status === 'validating' ? 'Detecting plant…' :
-            status === 'analyzing' ? 'Analyzing…' :
-                status === 'fetching' ? 'Preparing avatar…' : '';
+    const busy = CAPTURE_BUSY_STATUSES.has(status);
+    const statusLabel = CAPTURE_STATUS_LABELS[status] || '';
+    const activeStepIndex = CAPTURE_STEPS.indexOf(status);
 
     return (
         <main className="capture-screen">
@@ -518,8 +815,18 @@ function CaptureScreen({ onBack, onCapture }) {
             <BackButton onClick={onBack} light />
             {busy && (
                 <div className="capture-status" role="status" aria-live="polite">
-                    <span className="tree-loading-spinner"></span>
-                    <span>{statusLabel}</span>
+                    <div className="capture-status-panel">
+                        <span className="tree-loading-spinner"></span>
+                        <span>{statusLabel}</span>
+                        <div className="capture-progress-dots" aria-hidden="true">
+                            {CAPTURE_STEPS.map((step, index) => (
+                                <span
+                                    key={step}
+                                    className={index <= activeStepIndex ? 'active' : ''}
+                                ></span>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             )}
             {error && (
@@ -539,7 +846,6 @@ function CaptureScreen({ onBack, onCapture }) {
 }
 
 function TreeAnalysisScreen({ onBack }) {
-    const cameraInputRef = useRef(null);
     const galleryInputRef = useRef(null);
     const controllerRef = useRef(null);
     const [previewUrl, setPreviewUrl] = useState('');
@@ -601,16 +907,20 @@ function TreeAnalysisScreen({ onBack }) {
         }
     }, []);
 
+    const livePhoto = useLivePhotoCapture(startAnalysis);
+
     const handleFileChange = (event) => {
         const [file] = event.target.files || [];
         event.target.value = '';
+        livePhoto.clearCameraError();
         startAnalysis(file);
     };
 
-    const openCamera = () => cameraInputRef.current?.click();
     const openGallery = () => galleryInputRef.current?.click();
     const retry = () => startAnalysis(lastFile);
     const loading = status === 'loading';
+    const cameraVisible = livePhoto.cameraActive || livePhoto.cameraStarting;
+    const displayError = error || livePhoto.cameraError;
 
     return (
         <main className="prototype-shell tree-analysis-screen">
@@ -623,8 +933,23 @@ function TreeAnalysisScreen({ onBack }) {
                 <h1>Tree Scan</h1>
             </section>
             <section className="tree-capture-panel">
-                <div className={`tree-photo-preview${previewUrl ? ' has-image' : ''}`}>
-                    {previewUrl ? (
+                <div className={`tree-photo-preview${previewUrl ? ' has-image' : ''}${cameraVisible ? ' is-camera-active' : ''}`}>
+                    {cameraVisible ? (
+                        <>
+                            <video
+                                ref={livePhoto.videoRef}
+                                className="tree-live-camera"
+                                autoPlay
+                                playsInline
+                                muted
+                            />
+                            <CameraCaptureControls
+                                onCapture={livePhoto.captureCamera}
+                                onClose={livePhoto.stopCamera}
+                                disabled={livePhoto.cameraStarting || livePhoto.cameraCapturing}
+                            />
+                        </>
+                    ) : previewUrl ? (
                         <img src={previewUrl} alt="Selected tree preview" />
                     ) : (
                         <span className="tree-photo-placeholder" aria-hidden="true"></span>
@@ -635,15 +960,13 @@ function TreeAnalysisScreen({ onBack }) {
                             <strong>Analyzing tree...</strong>
                         </div>
                     )}
+                    {livePhoto.cameraStarting && (
+                        <div className="tree-loading" role="status" aria-live="polite">
+                            <span className="tree-loading-spinner"></span>
+                            <strong>Opening camera...</strong>
+                        </div>
+                    )}
                 </div>
-                <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="tree-file-input"
-                    onChange={handleFileChange}
-                />
                 <input
                     ref={galleryInputRef}
                     type="file"
@@ -652,11 +975,19 @@ function TreeAnalysisScreen({ onBack }) {
                     onChange={handleFileChange}
                 />
                 <div className="tree-capture-actions">
-                    <button type="button" className="tree-action-button tree-action-button--primary" onClick={openCamera} disabled={loading}>
+                    <button
+                        type="button"
+                        className="tree-action-button tree-action-button--primary"
+                        onClick={() => {
+                            setError('');
+                            livePhoto.openCamera();
+                        }}
+                        disabled={loading || cameraVisible}
+                    >
                         <span className="tree-action-icon tree-action-icon--camera" aria-hidden="true"></span>
                         Open camera
                     </button>
-                    <button type="button" className="tree-action-button" onClick={openGallery} disabled={loading}>
+                    <button type="button" className="tree-action-button" onClick={openGallery} disabled={loading || cameraVisible}>
                         <span className="tree-action-icon tree-action-icon--gallery" aria-hidden="true"></span>
                         Select photo
                     </button>
@@ -667,10 +998,10 @@ function TreeAnalysisScreen({ onBack }) {
                     </p>
                 )}
             </section>
-            {error && (
+            {displayError && (
                 <section className="tree-error" role="alert">
-                    <strong>Analysis failed</strong>
-                    <p>{error}</p>
+                    <strong>{livePhoto.cameraError && !error ? 'Camera unavailable' : 'Analysis failed'}</strong>
+                    <p>{displayError}</p>
                     {lastFile && (
                         <button type="button" className="tree-retry-button" onClick={retry}>
                             Retry analysis
@@ -714,8 +1045,28 @@ function TreeAnalysisResult({ result }) {
     );
 }
 
+function CameraCaptureControls({ onCapture, onClose, disabled }) {
+    return (
+        <div className="tree-camera-controls">
+            <button
+                type="button"
+                className="tree-camera-cancel"
+                aria-label="Close camera"
+                onClick={onClose}
+                disabled={disabled}
+            ></button>
+            <button
+                type="button"
+                className="tree-camera-capture"
+                aria-label="Capture photo"
+                onClick={onCapture}
+                disabled={disabled}
+            ></button>
+        </div>
+    );
+}
+
 function Sam3LiteTextScreen({ onBack }) {
-    const cameraInputRef = useRef(null);
     const galleryInputRef = useRef(null);
     const controllerRef = useRef(null);
     const runtimeInfo = useMemo(() => getOnDeviceSegmentationStatus(), []);
@@ -763,6 +1114,8 @@ function Sam3LiteTextScreen({ onBack }) {
         setError('');
         setStatus('ready');
     }, []);
+
+    const livePhoto = useLivePhotoCapture(setSelectedFile);
 
     const runSegmentation = useCallback(async () => {
         if (!lastFile) {
@@ -812,12 +1165,15 @@ function Sam3LiteTextScreen({ onBack }) {
     const handleFileChange = (event) => {
         const [file] = event.target.files || [];
         event.target.value = '';
+        livePhoto.clearCameraError();
         setSelectedFile(file);
     };
 
     const loading = status === 'loading';
+    const cameraVisible = livePhoto.cameraActive || livePhoto.cameraStarting;
     const summary = result ? summarizeSam3LiteTextOutput(result) : null;
     const canRun = Boolean(lastFile && prompt.trim() && !loading);
+    const displayError = error || livePhoto.cameraError;
     const runtimeDetails = runtimeInfo.device === 'webgpu'
         ? 'WebGPU selected'
         : runtimeInfo.webgpuAutoEnabled
@@ -837,14 +1193,16 @@ function Sam3LiteTextScreen({ onBack }) {
                 <h1>Plant mask on device</h1>
             </section>
             <section className="sam3-workbench">
-                <Sam3LiteTextPreview previewUrl={previewUrl} result={result} loading={loading} />
-                <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="tree-file-input"
-                    onChange={handleFileChange}
+                <Sam3LiteTextPreview
+                    previewUrl={previewUrl}
+                    result={result}
+                    loading={loading}
+                    cameraVisible={cameraVisible}
+                    cameraStarting={livePhoto.cameraStarting}
+                    cameraCapturing={livePhoto.cameraCapturing}
+                    cameraVideoRef={livePhoto.videoRef}
+                    onCameraCapture={livePhoto.captureCamera}
+                    onCameraClose={livePhoto.stopCamera}
                 />
                 <input
                     ref={galleryInputRef}
@@ -854,11 +1212,19 @@ function Sam3LiteTextScreen({ onBack }) {
                     onChange={handleFileChange}
                 />
                 <div className="tree-capture-actions sam3-source-actions">
-                    <button type="button" className="tree-action-button tree-action-button--primary" onClick={() => cameraInputRef.current?.click()} disabled={loading}>
+                    <button
+                        type="button"
+                        className="tree-action-button tree-action-button--primary"
+                        onClick={() => {
+                            setError('');
+                            livePhoto.openCamera();
+                        }}
+                        disabled={loading || cameraVisible}
+                    >
                         <span className="tree-action-icon tree-action-icon--camera" aria-hidden="true"></span>
                         Open camera
                     </button>
-                    <button type="button" className="tree-action-button" onClick={() => galleryInputRef.current?.click()} disabled={loading}>
+                    <button type="button" className="tree-action-button" onClick={() => galleryInputRef.current?.click()} disabled={loading || cameraVisible}>
                         <span className="tree-action-icon tree-action-icon--gallery" aria-hidden="true"></span>
                         Select photo
                     </button>
@@ -911,10 +1277,10 @@ function Sam3LiteTextScreen({ onBack }) {
                     </p>
                 )}
             </section>
-            {error && (
+            {displayError && (
                 <section className="tree-error" role="alert">
-                    <strong>Segmentation failed</strong>
-                    <p>{error}</p>
+                    <strong>{livePhoto.cameraError && !error ? 'Camera unavailable' : 'Segmentation failed'}</strong>
+                    <p>{displayError}</p>
                 </section>
             )}
             {summary && <Sam3LiteTextSummary summary={summary} />}
@@ -923,7 +1289,17 @@ function Sam3LiteTextScreen({ onBack }) {
     );
 }
 
-function Sam3LiteTextPreview({ previewUrl, result, loading }) {
+function Sam3LiteTextPreview({
+    previewUrl,
+    result,
+    loading,
+    cameraVisible,
+    cameraStarting,
+    cameraCapturing,
+    cameraVideoRef,
+    onCameraCapture,
+    onCameraClose
+}) {
     const canvasRef = useRef(null);
     const [maskMessage, setMaskMessage] = useState('');
     const overlayUrl = useMemo(() => getSam3LiteTextOverlayUrl(result), [result]);
@@ -951,19 +1327,40 @@ function Sam3LiteTextPreview({ previewUrl, result, loading }) {
     }, [overlayUrl, result]);
 
     return (
-        <div className={`sam3-preview${previewUrl ? ' has-image' : ''}`}>
-            {previewUrl ? (
+        <div className={`sam3-preview${previewUrl ? ' has-image' : ''}${cameraVisible ? ' is-camera-active' : ''}`}>
+            {cameraVisible ? (
+                <>
+                    <video
+                        ref={cameraVideoRef}
+                        className="tree-live-camera"
+                        autoPlay
+                        playsInline
+                        muted
+                    />
+                    <CameraCaptureControls
+                        onCapture={onCameraCapture}
+                        onClose={onCameraClose}
+                        disabled={cameraStarting || cameraCapturing}
+                    />
+                </>
+            ) : previewUrl ? (
                 <img src={previewUrl} alt="Selected image preview" />
             ) : (
                 <span className="tree-photo-placeholder" aria-hidden="true"></span>
             )}
-            {overlayUrl && <img className="sam3-overlay-image" src={overlayUrl} alt="" aria-hidden="true" />}
-            {!overlayUrl && <canvas ref={canvasRef} className="sam3-mask-canvas" aria-hidden="true"></canvas>}
-            {maskMessage && <span className="sam3-mask-message">{maskMessage}</span>}
+            {!cameraVisible && overlayUrl && <img className="sam3-overlay-image" src={overlayUrl} alt="" aria-hidden="true" />}
+            {!cameraVisible && !overlayUrl && <canvas ref={canvasRef} className="sam3-mask-canvas" aria-hidden="true"></canvas>}
+            {!cameraVisible && maskMessage && <span className="sam3-mask-message">{maskMessage}</span>}
             {loading && (
                 <div className="tree-loading" role="status" aria-live="polite">
                     <span className="tree-loading-spinner"></span>
                     <strong>Loading local model...</strong>
+                </div>
+            )}
+            {cameraStarting && (
+                <div className="tree-loading" role="status" aria-live="polite">
+                    <span className="tree-loading-spinner"></span>
+                    <strong>Opening camera...</strong>
                 </div>
             )}
         </div>
@@ -1053,6 +1450,7 @@ function ChatScreen({ chatState, setChatState, onBack, slideUpPanel = false, ana
     const handleCareAction = (type) => {
         setChatState('speaking');
         setCareAnimation(type);
+        setArCharacterSprite(type === 'sun' ? 'sunlight' : type);
     };
 
     const panelClassName = [
@@ -1236,6 +1634,12 @@ function ChatTranscript() {
     const hasLiveCaption = Boolean(liveCaption && !errorText);
     const overlayLabel = isResponding ? 'Jasmine is speaking...' : 'Listening...';
     const micDisabled = isResponding;
+
+    useEffect(() => {
+        setArCharacterSprite(isResponding ? 'talking' : 'idle');
+
+        return () => setArCharacterSprite('idle');
+    }, [isResponding]);
 
     return (
         <div className={`chat-transcript${isListening ? ' is-listening' : ''}${isResponding ? ' is-responding' : ''}${errorText ? ' has-error' : ''}`}>

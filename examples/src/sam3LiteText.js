@@ -14,6 +14,7 @@ const BROWSER_SEGMENTATION_IMAGE_MAX_WIDTH = Number(import.meta.env.VITE_BROWSER
 const BROWSER_SEGMENTATION_IMAGE_QUALITY = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_IMAGE_JPEG_QUALITY || 0.82);
 const DEFAULT_THRESHOLD = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_THRESHOLD || 0.5);
 const DEFAULT_MASK_THRESHOLD = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_MASK_THRESHOLD || 0.5);
+const DEFAULT_MIN_AREA_RATIO = Number(import.meta.env.VITE_BROWSER_SEGMENTATION_MIN_AREA_RATIO || 0.015);
 
 const VEGETATION_LABELS = new Map([
     ['tree', ['tree']],
@@ -688,6 +689,7 @@ export async function analyzeSam3LiteTextPhoto(file, {
     const requestedDevice = resolveBrowserDevice();
     const normalizedThreshold = boundedNumber(threshold, DEFAULT_THRESHOLD, 0.01, 0.99);
     const normalizedMaskThreshold = boundedNumber(maskThreshold, DEFAULT_MASK_THRESHOLD, 0.01, 0.99);
+    const minAreaRatio = boundedNumber(DEFAULT_MIN_AREA_RATIO, 0.015, 0, 0.5);
     let activeDevice = requestedDevice;
     let fallbackReason = '';
 
@@ -737,16 +739,21 @@ export async function analyzeSam3LiteTextPhoto(file, {
         .filter(segment => labelMatchesPrompt(segment.label, promptLabels))
         .map((segment, index) => {
             const encoded = encodeRawImageMask(segment.mask);
+            const maskSize = encoded?.rle?.size || [];
+            const maskArea = Number(maskSize[0] || 0) * Number(maskSize[1] || 0);
+            const areaPixels = encoded?.area || 0;
 
             return {
                 index,
                 label: segment.label || `segment-${index + 1}`,
                 score: asNumericScore(segment.score),
                 mask: encoded?.rle || null,
-                area_pixels: encoded?.area || 0
+                area_pixels: areaPixels,
+                area_ratio: maskArea > 0 ? areaPixels / maskArea : 0
             };
         })
         .filter(segment => segment.mask)
+        .filter(segment => segment.area_ratio >= minAreaRatio)
         .sort((left, right) => right.area_pixels - left.area_pixels);
 
     const compactOutput = {
@@ -761,6 +768,7 @@ export async function analyzeSam3LiteTextPhoto(file, {
         prompt,
         threshold: normalizedThreshold,
         mask_threshold: normalizedMaskThreshold,
+        min_area_ratio: minAreaRatio,
         image_size: {
             width: image.width,
             height: image.height

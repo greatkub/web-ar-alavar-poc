@@ -20,17 +20,45 @@ export function initializeCameraDemo()
         minDominance: 8,
         alphaBoost: 80
     };
+    const thumbOcclusion = {
+        widthRatio: 0.105,
+        minWidth: 14,
+        maxWidth: 72,
+        tipRadiusRatio: 0.62,
+        jointRadiusRatio: 0.48
+    };
+    const energyBall = {
+        minRadius: 30,
+        maxRadius: 96,
+        radiusRatio: 0.20,
+        blurRatio: 0.24,
+        coreAlpha: 0.58,
+        colorAlpha: 0.42,
+        ringAlpha: 0.16,
+        lobes: [
+            { color: '251, 173, 4', orbit: 0.20, radius: 0.86, speed: 3.5, phase: 0 },
+            { color: '3, 161, 217', orbit: 0.16, radius: 0.78, speed: -6, phase: 1.7 },
+            { color: '247, 3, 109', orbit: 0.18, radius: 0.82, speed: 8, phase: 3.1 },
+            { color: '147, 255, 22', orbit: 0.22, radius: 0.88, speed: -11, phase: 4.4 }
+        ]
+    };
     const mediaPipeConfig = {
         scriptUrl: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js',
         assetBaseUrl: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
-        frameIntervalMs: 450,
-        sampleWidth: 192
+        idleFrameIntervalMs: 450,
+        activeFrameIntervalMs: 160,
+        dragFrameIntervalMs: 95,
+        sampleWidth: 192,
+        maxNumHands: 1
     };
     const interactionConfig = {
         pinchRatio: 0.22,
         rubRadiusRatio: 0.16,
+        grabBoundsPaddingRatio: 0.10,
         cheekRadiusRatio: 0.14,
         scoopWidthRatio: 0.58,
+        dragSmoothing: 0.62,
+        dragOffsetLimitRatio: 1.15,
         statusDecay: 0.72
     };
 
@@ -75,6 +103,145 @@ export function initializeCameraDemo()
         }
 
         occlusionCtx.putImageData( occlusionFrame, 0, 0 );
+    }
+
+    function renderThumbOcclusion( sourceCanvas, occlusionCtx, handFrame )
+    {
+        if( !handFrame.ready || !handFrame.hands?.length )
+        {
+            return;
+        }
+
+        const cameraPattern = occlusionCtx.createPattern( sourceCanvas, 'no-repeat' );
+
+        if( !cameraPattern )
+        {
+            return;
+        }
+
+        occlusionCtx.save();
+        occlusionCtx.globalCompositeOperation = 'source-over';
+        occlusionCtx.lineCap = 'round';
+        occlusionCtx.lineJoin = 'round';
+        occlusionCtx.strokeStyle = cameraPattern;
+        occlusionCtx.fillStyle = cameraPattern;
+
+        for( const hand of handFrame.hands )
+        {
+            const thumb = [hand.points[1], hand.points[2], hand.points[3], hand.points[4]];
+
+            if( thumb.some( point => !point ) )
+            {
+                continue;
+            }
+
+            const width = clamp( hand.handSize * thumbOcclusion.widthRatio, thumbOcclusion.minWidth, thumbOcclusion.maxWidth );
+
+            occlusionCtx.lineWidth = width;
+            occlusionCtx.beginPath();
+            occlusionCtx.moveTo( thumb[0].x, thumb[0].y );
+            occlusionCtx.lineTo( thumb[1].x, thumb[1].y );
+            occlusionCtx.lineTo( thumb[2].x, thumb[2].y );
+            occlusionCtx.lineTo( thumb[3].x, thumb[3].y );
+            occlusionCtx.stroke();
+
+            for( const [index, point] of thumb.entries() )
+            {
+                const radius = width * ( index === thumb.length - 1 ? thumbOcclusion.tipRadiusRatio : thumbOcclusion.jointRadiusRatio );
+
+                occlusionCtx.beginPath();
+                occlusionCtx.arc( point.x, point.y, radius, 0, Math.PI * 2 );
+                occlusionCtx.fill();
+            }
+        }
+
+        occlusionCtx.restore();
+    }
+
+    function renderPinchContactCue( occlusionCtx, handFrame, time, active )
+    {
+        if( !active || !handFrame.ready || !handFrame.hands?.length )
+        {
+            return;
+        }
+
+        occlusionCtx.save();
+
+        for( const hand of handFrame.hands )
+        {
+            if( !hand.isPinching )
+            {
+                continue;
+            }
+
+            const thumbTip = hand.points[4];
+            const indexTip = hand.points[8];
+
+            if( !thumbTip || !indexTip )
+            {
+                continue;
+            }
+
+            const pinchTightness = clamp(
+                1 - hand.pinchDistance / Math.max( 1, hand.handSize * interactionConfig.pinchRatio * 1.45 ),
+                0,
+                1
+            );
+
+            if( pinchTightness <= 0 )
+            {
+                continue;
+            }
+
+            const center = midpoint( thumbTip, indexTip );
+            const radius = clamp( hand.handSize * energyBall.radiusRatio, energyBall.minRadius, energyBall.maxRadius );
+            const blur = Math.max( 10, radius * energyBall.blurRatio );
+            const seconds = time / 1000;
+
+            occlusionCtx.globalCompositeOperation = 'lighter';
+            occlusionCtx.filter = `blur(${ blur }px)`;
+
+            for( const lobe of energyBall.lobes )
+            {
+                const direction = lobe.speed < 0 ? -1 : 1;
+                const angle = lobe.phase + direction * seconds / Math.abs( lobe.speed ) * Math.PI * 2;
+                const pulse = 0.88 + Math.sin( seconds * 2.4 + lobe.phase ) * 0.12;
+                const x = center.x + Math.cos( angle ) * radius * lobe.orbit;
+                const y = center.y + Math.sin( angle ) * radius * lobe.orbit;
+                const lobeRadius = radius * lobe.radius * pulse;
+                const gradient = occlusionCtx.createRadialGradient( x, y, 0, x, y, lobeRadius );
+
+                gradient.addColorStop( 0, `rgba(${ lobe.color }, ${ energyBall.colorAlpha * pinchTightness })` );
+                gradient.addColorStop( 0.55, `rgba(${ lobe.color }, ${ energyBall.colorAlpha * pinchTightness * 0.62 })` );
+                gradient.addColorStop( 1, `rgba(${ lobe.color }, 0)` );
+                occlusionCtx.fillStyle = gradient;
+                occlusionCtx.beginPath();
+                occlusionCtx.arc( x, y, lobeRadius, 0, Math.PI * 2 );
+                occlusionCtx.fill();
+            }
+
+            occlusionCtx.filter = 'none';
+            occlusionCtx.globalCompositeOperation = 'source-over';
+
+            const core = occlusionCtx.createRadialGradient( center.x, center.y, 0, center.x, center.y, radius * 0.76 );
+            core.addColorStop( 0, `rgba(255, 255, 255, ${ energyBall.coreAlpha * pinchTightness })` );
+            core.addColorStop( 0.52, `rgba(255, 255, 255, ${ energyBall.coreAlpha * pinchTightness * 0.72 })` );
+            core.addColorStop( 1, 'rgba(255, 255, 255, 0)' );
+            occlusionCtx.fillStyle = core;
+            occlusionCtx.beginPath();
+            occlusionCtx.arc( center.x, center.y, radius * 0.76, 0, Math.PI * 2 );
+            occlusionCtx.fill();
+
+            occlusionCtx.strokeStyle = `rgba(255, 255, 255, ${ energyBall.ringAlpha * pinchTightness })`;
+            occlusionCtx.lineWidth = Math.max( 1.5, radius * 0.035 );
+            occlusionCtx.beginPath();
+            occlusionCtx.arc( center.x, center.y, radius * 0.52, 0, Math.PI * 2 );
+            occlusionCtx.stroke();
+        }
+
+        occlusionCtx.filter = 'none';
+        occlusionCtx.globalCompositeOperation = 'source-over';
+        occlusionCtx.restore();
     }
 
     const clamp = ( value, min, max ) => Math.max( min, Math.min( max, value ) );
@@ -191,6 +358,7 @@ export function initializeCameraDemo()
         let ready = false;
         let running = false;
         let lastSentTime = 0;
+        let frameIntervalMs = mediaPipeConfig.idleFrameIntervalMs;
         let hands = null;
 
         const setEnabled = value =>
@@ -260,7 +428,7 @@ export function initializeCameraDemo()
                     locateFile: file => `${ mediaPipeConfig.assetBaseUrl }/${ file }`
                 } );
                 hands.setOptions( {
-                    maxNumHands: 2,
+                    maxNumHands: mediaPipeConfig.maxNumHands,
                     modelComplexity: 0,
                     minDetectionConfidence: 0.55,
                     minTrackingConfidence: 0.45
@@ -285,7 +453,7 @@ export function initializeCameraDemo()
 
         const processFrame = time =>
         {
-            if( !enabled || !ready || running || time - lastSentTime < mediaPipeConfig.frameIntervalMs )
+            if( !enabled || !ready || running || time - lastSentTime < frameIntervalMs )
             {
                 return;
             }
@@ -343,6 +511,10 @@ export function initializeCameraDemo()
             {
                 return lastFrame;
             },
+            setFrameIntervalMs( intervalMs )
+            {
+                frameIntervalMs = Math.max( mediaPipeConfig.dragFrameIntervalMs, intervalMs || mediaPipeConfig.idleFrameIntervalMs );
+            },
             processFrame,
             reset()
             {
@@ -362,6 +534,15 @@ export function initializeCameraDemo()
             roll: 0,
             cheekPull: 0
         };
+        const drag = {
+            active: false,
+            offsetX: 0,
+            offsetY: 0,
+            screenX: 0,
+            screenY: 0,
+            lastAnchor: null
+        };
+        let releasedAnchor = null;
         let previousAction = 'idle';
 
         const decayEffects = () =>
@@ -371,6 +552,71 @@ export function initializeCameraDemo()
             effect.scaleBoost *= interactionConfig.statusDecay;
             effect.roll *= interactionConfig.statusDecay;
             effect.cheekPull *= interactionConfig.statusDecay;
+        };
+
+        const resetDrag = () =>
+        {
+            drag.active = false;
+            drag.offsetX = 0;
+            drag.offsetY = 0;
+            drag.screenX = 0;
+            drag.screenY = 0;
+            drag.lastAnchor = null;
+        };
+
+        const anchorScreenPoint = bounds => ( {
+            x: bounds.centerX,
+            y: bounds.bottom
+        } );
+
+        const startDrag = ( hand, bounds ) =>
+        {
+            const anchorPoint = anchorScreenPoint( bounds );
+            const maxOffset = Math.max( bounds.width, bounds.height ) * interactionConfig.dragOffsetLimitRatio;
+
+            drag.active = true;
+            drag.offsetX = clamp( anchorPoint.x - hand.pinchCenter.x, -maxOffset, maxOffset );
+            drag.offsetY = clamp( anchorPoint.y - hand.pinchCenter.y, -maxOffset, maxOffset );
+            drag.screenX = anchorPoint.x;
+            drag.screenY = anchorPoint.y;
+            drag.lastAnchor = {
+                x: drag.screenX,
+                y: drag.screenY,
+                confidence: 1,
+                follow: true
+            };
+        };
+
+        const updateDrag = ( view, hand ) =>
+        {
+            const targetX = clamp( hand.pinchCenter.x + drag.offsetX, 0, view.width );
+            const targetY = clamp( hand.pinchCenter.y + drag.offsetY, 0, view.height );
+
+            drag.screenX += ( targetX - drag.screenX ) * interactionConfig.dragSmoothing;
+            drag.screenY += ( targetY - drag.screenY ) * interactionConfig.dragSmoothing;
+            drag.lastAnchor = {
+                x: drag.screenX,
+                y: drag.screenY,
+                confidence: 1,
+                follow: true
+            };
+
+            view.updateAnchorFromScreen( drag.lastAnchor, true );
+
+            effect.scaleBoost = Math.max( effect.scaleBoost, 0.025 );
+            effect.roll = clamp( ( hand.pinchCenter.x - view.width * 0.5 ) / view.width, -0.06, 0.06 );
+            view.setInteraction( effect );
+            setGestureStatus( 'drag_character', 'Move character' );
+            emitAction( {
+                action: 'drag_character',
+                intensity: 1,
+                gesture: hand.gesture,
+                handedness: hand.handedness,
+                x: hand.pinchCenter.x,
+                y: hand.pinchCenter.y
+            } );
+
+            return mediaPipeConfig.dragFrameIntervalMs;
         };
 
         const emitAction = detail =>
@@ -408,6 +654,16 @@ export function initializeCameraDemo()
             };
         };
 
+        const pointInsideGrabBounds = ( point, bounds ) =>
+        {
+            const padding = Math.min( bounds.width, bounds.height ) * interactionConfig.grabBoundsPaddingRatio;
+
+            return point.x >= bounds.left - padding &&
+                point.x <= bounds.right + padding &&
+                point.y >= bounds.top - padding &&
+                point.y <= bounds.bottom + padding;
+        };
+
         const scoreHandAction = ( hand, bounds, regions ) =>
         {
             const headDistance = distance( hand.indexTip, regions.head );
@@ -417,6 +673,17 @@ export function initializeCameraDemo()
                 1
             );
             let best = null;
+
+            if( hand.isPinching && pointInsideGrabBounds( hand.pinchCenter, bounds ) )
+            {
+                return {
+                    action: 'drag_character',
+                    label: 'Move character',
+                    intensity: 1,
+                    point: hand.pinchCenter,
+                    hand
+                };
+            }
 
             if( rubScore > 0.34 && !hand.isPinching )
             {
@@ -490,12 +757,27 @@ export function initializeCameraDemo()
             reset( view )
             {
                 previousAction = 'idle';
+                resetDrag();
+                releasedAnchor = null;
                 effect.lift = 0;
                 effect.offsetX = 0;
                 effect.scaleBoost = 0;
                 effect.roll = 0;
                 effect.cheekPull = 0;
                 view.setInteraction();
+            },
+
+            isDragging()
+            {
+                return drag.active;
+            },
+
+            consumeReleasedAnchor()
+            {
+                const anchor = releasedAnchor;
+                releasedAnchor = null;
+
+                return anchor;
             },
 
             update( view, handFrame )
@@ -506,27 +788,54 @@ export function initializeCameraDemo()
 
                 if( !handFrame.ready )
                 {
+                    if( drag.active )
+                    {
+                        releasedAnchor = drag.lastAnchor ? { ...drag.lastAnchor } : null;
+                        resetDrag();
+                    }
+
                     view.setInteraction( effect );
-                    return;
+                    return mediaPipeConfig.idleFrameIntervalMs;
                 }
 
                 if( !bounds )
                 {
+                    resetDrag();
                     view.setInteraction( effect );
                     setGestureStatus( 'waiting_anchor', 'Place character first' );
                     emitAction( { action: 'waiting_anchor', intensity: 0 } );
-                    return;
+                    return mediaPipeConfig.idleFrameIntervalMs;
                 }
 
                 const regions = getRegions( bounds );
                 const hands = handFrame.hands || [];
+
+                if( drag.active )
+                {
+                    const pinchingHand = hands
+                        .filter( hand => hand.isPinching )
+                        .sort( ( a, b ) => distance( a.pinchCenter, { x: drag.screenX - drag.offsetX, y: drag.screenY - drag.offsetY } ) -
+                            distance( b.pinchCenter, { x: drag.screenX - drag.offsetX, y: drag.screenY - drag.offsetY } ) )[0];
+
+                    if( pinchingHand )
+                    {
+                        return updateDrag( view, pinchingHand );
+                    }
+
+                    releasedAnchor = drag.lastAnchor ? { ...drag.lastAnchor } : null;
+                    resetDrag();
+                    view.setInteraction( effect );
+                    setGestureStatus( 'drag_release', 'Release character' );
+                    emitAction( { action: 'drag_release', intensity: 0 } );
+                    return mediaPipeConfig.activeFrameIntervalMs;
+                }
 
                 if( hands.length === 0 )
                 {
                     view.setInteraction( effect );
                     setGestureStatus( 'idle', 'Show hand near character' );
                     emitAction( { action: 'idle', intensity: 0 } );
-                    return;
+                    return mediaPipeConfig.idleFrameIntervalMs;
                 }
 
                 const best = hands
@@ -539,10 +848,15 @@ export function initializeCameraDemo()
                     view.setInteraction( effect );
                     setGestureStatus( 'tracking', `${ hands[0].gesture } hand detected` );
                     emitAction( { action: 'tracking', intensity: 0.15, gesture: hands[0].gesture, handedness: hands[0].handedness } );
-                    return;
+                    return mediaPipeConfig.activeFrameIntervalMs;
                 }
 
-                if( best.action === 'rub_head' )
+                if( best.action === 'drag_character' )
+                {
+                    startDrag( best.hand, bounds );
+                    return updateDrag( view, best.hand );
+                }
+                else if( best.action === 'rub_head' )
                 {
                     const rubDirection = clamp( ( best.point.x - regions.head.x ) / regions.head.radius, -1, 1 );
                     effect.roll = rubDirection * 0.08 * best.intensity + Math.sin( performance.now() / 60 ) * 0.025 * best.intensity;
@@ -572,6 +886,8 @@ export function initializeCameraDemo()
                     x: best.point.x,
                     y: best.point.y
                 } );
+
+                return mediaPipeConfig.activeFrameIntervalMs;
             }
         };
     }
@@ -1190,25 +1506,41 @@ export function initializeCameraDemo()
                 if( pose )
                 {
                     let anchor = null;
+                    const isDraggingCharacter = characterInteraction.isDragging();
 
                     if( requestedAnchor )
                     {
                         anchor = patchTracker.lock( frame, requestedAnchor );
                     }
-                    else
+                    else if( !isDraggingCharacter )
                     {
                         anchor = patchTracker.update( frame );
                     }
 
-                    if( !anchor )
+                    if( !anchor && !isDraggingCharacter )
                     {
                         anchor = view.isAnchorLocked() ? null : treeBaseTracker.update( frame );
                     }
 
                     requestedAnchor = null;
                     view.updateCameraPose( pose, anchor );
-                    characterInteraction.update( view, gestureTracker.update() );
+                    const handFrame = gestureTracker.update();
+                    gestureTracker.setFrameIntervalMs( characterInteraction.update( view, handFrame ) );
+                    const releasedAnchor = characterInteraction.consumeReleasedAnchor();
+
+                    if( characterInteraction.isDragging() )
+                    {
+                        patchTracker.reset();
+                    }
+                    else if( releasedAnchor )
+                    {
+                        patchTracker.reset();
+                        requestedAnchor = releasedAnchor;
+                    }
+
                     renderLeafOcclusion( frame, occlusionCtx, occlusionFrame );
+                    renderThumbOcclusion( $canvas, occlusionCtx, handFrame );
+                    renderPinchContactCue( occlusionCtx, handFrame, performance.now(), characterInteraction.isDragging() );
                 }
                 else
                 {

@@ -15,6 +15,7 @@
     --red: #d21d14;
     --orange: #f6a11b;
     --water: #69bdd0;
+    --ar-browser-ui-bottom: 0px;
 }
 
 * {
@@ -662,8 +663,8 @@ button {
 }
 
 /* Hide demo UI overlays — we auto-start and use it as a background */
-#overlay,
-#gesture_status {
+.camera-demo-bg #overlay,
+.camera-demo-bg #gesture_status {
     display: none !important;
 }
 
@@ -688,6 +689,35 @@ button {
     color: #fff;
     font-size: 15px;
     font-weight: 500;
+}
+
+.capture-status-panel {
+    display: grid;
+    justify-items: center;
+    gap: 12px;
+    min-width: 190px;
+    padding: 18px 22px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    background: rgba(18, 22, 18, 0.32);
+    backdrop-filter: blur(8px);
+}
+
+.capture-progress-dots {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.capture-progress-dots span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.34);
+}
+
+.capture-progress-dots span.active {
+    background: #ffffff;
 }
 
 .capture-error {
@@ -727,6 +757,11 @@ button {
     border: 2px solid #1f1f1f;
     border-radius: 50%;
     background: #fff;
+}
+
+.capture-control:disabled {
+    opacity: 0.55;
+    cursor: wait;
 }
 
 .tree-analysis-screen {
@@ -769,6 +804,91 @@ button {
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+.tree-photo-preview.is-camera-active,
+.sam3-preview.is-camera-active {
+    background: #10150f;
+}
+
+.tree-live-camera {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.tree-camera-controls {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 14px;
+    pointer-events: none;
+}
+
+.tree-camera-controls button {
+    pointer-events: auto;
+}
+
+.tree-camera-capture {
+    position: relative;
+    width: 58px;
+    height: 58px;
+    padding: 0;
+    border: 5px solid #fff;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+    cursor: pointer;
+}
+
+.tree-camera-capture::after {
+    content: "";
+    position: absolute;
+    inset: 7px;
+    border-radius: 50%;
+    background: #fff;
+}
+
+.tree-camera-cancel {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.52);
+    border-radius: 50%;
+    background: rgba(17, 19, 15, 0.58);
+    cursor: pointer;
+}
+
+.tree-camera-cancel::before,
+.tree-camera-cancel::after {
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 18px;
+    height: 2px;
+    border-radius: 2px;
+    background: #fff;
+}
+
+.tree-camera-cancel::before {
+    transform: rotate(45deg);
+}
+
+.tree-camera-cancel::after {
+    transform: rotate(-45deg);
+}
+
+.tree-camera-capture:disabled,
+.tree-camera-cancel:disabled {
+    cursor: wait;
+    opacity: 0.62;
 }
 
 .tree-photo-placeholder {
@@ -1397,6 +1517,13 @@ button {
     gap: 12px;
 }
 
+.ar-care-actions {
+    position: fixed;
+    right: max(24px, calc(env(safe-area-inset-right) + 24px));
+    bottom: max(54px, calc(env(safe-area-inset-bottom) + var(--ar-browser-ui-bottom, 0px) + 54px));
+    z-index: 6;
+}
+
 .care-action {
     position: relative;
     width: 62px;
@@ -1996,7 +2123,7 @@ button {
     position: fixed;
     z-index: 4;
     left: 50%;
-    bottom: max(28px, calc(env(safe-area-inset-bottom) + 22px));
+    bottom: max(28px, calc(env(safe-area-inset-bottom) + var(--ar-browser-ui-bottom, 0px) + 22px));
     width: 86px;
     height: 86px;
     padding: 0;
@@ -2035,7 +2162,7 @@ button {
     position: fixed;
     z-index: 5;
     left: max(12px, env(safe-area-inset-left));
-    bottom: max(34px, calc(env(safe-area-inset-bottom) + 28px));
+    bottom: max(34px, calc(env(safe-area-inset-bottom) + var(--ar-browser-ui-bottom, 0px) + 28px));
     min-width: 74px;
     min-height: 44px;
     padding: 0 14px;
@@ -2059,7 +2186,7 @@ button {
     position: fixed;
     z-index: 5;
     right: max(12px, env(safe-area-inset-right));
-    bottom: max(128px, calc(env(safe-area-inset-bottom) + 116px));
+    bottom: max(128px, calc(env(safe-area-inset-bottom) + var(--ar-browser-ui-bottom, 0px) + 116px));
     max-width: min(280px, calc(100vw - 24px));
     padding: 9px 11px;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -2082,6 +2209,11 @@ button {
 
 #gesture_status[data-action="rub_head"] {
     border-color: rgba(255, 235, 170, 0.72);
+}
+
+#gesture_status[data-action="drag_character"],
+#gesture_status[data-action="drag_release"] {
+    border-color: rgba(143, 255, 194, 0.78);
 }
 
 #gesture_status[data-action="scoop_lift"] {
